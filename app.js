@@ -599,7 +599,8 @@ function clearAll() {
 /* ---------- Auth & foyer ---------- */
 async function sendCode(email) {
   app.email = email; LS.set("bf:email", email); app.busy = true; app.authErr = ""; render();
-  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+  const redirectTo = location.origin + location.pathname.replace(/index\.html$/, "");
+  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: redirectTo } });
   app.busy = false;
   if (error) { app.authErr = /not authorized/i.test(error.message) ? "Cette adresse n'est pas autorisée par l'e-mail par défaut de Supabase : ajoutez-la à l'équipe du projet ou configurez un SMTP (voir README)."
       : /rate|limit/i.test(error.message) ? "Trop de demandes : patientez avant de redemander un code (2 e-mails par heure avec l'e-mail par défaut de Supabase)." : "Envoi impossible : " + error.message; render(); return; }
