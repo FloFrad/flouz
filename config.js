@@ -2,6 +2,6 @@
 // Ces deux valeurs peuvent être publiques : l'accès aux données est
 // protégé par les règles de sécurité (RLS) définies dans supabase/schema.sql.
 window.BUDGET_CONFIG = {
-  supabaseUrl: "https://wrotglmdwlncggtkedxu.supabase.co/rest/v1/",
+  supabaseUrl: "https://wrotglmdwlncggtkedxu.supabase.co",
   supabaseAnonKey: "sb_publishable_n1LTek-kxb75VkGQYsvGbQ_q5JxZVWE"
 };
