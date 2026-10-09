@@ -253,6 +253,18 @@ function exampleBanner(S) {
   return S.exemple ? `<div class="banner"><span>Ce budget contient des <b>montants d'exemple</b>. Remplacez-les par les vôtres, ou repartez de zéro.</span><div class="btnrow"><button class="btn line" data-act="keepExample">Garder et modifier</button><button class="btn danger" data-act="askClear">Tout vider</button></div></div>` : "";
 }
 
+function yearChart(S) {
+  const cs = Array.from({ length: 12 }, (_, i) => calc(S, i + 1));
+  const part = c => [["Charges", c.charges, "--c-charges"], ["À mettre de côté", c.provisions, "--c-prov"], ["Enveloppes", c.env, "--c-env"], ["Épargne", Math.max(c.epargne, 0), "--c-epargne"]];
+  const max = Math.max(...cs.map(c => part(c).reduce((a, [, v]) => a + v, 0)), 1);
+  const cols = cs.map((c, i) => {
+    const ps = part(c), tot = ps.reduce((a, [, v]) => a + v, 0);
+    const label = `${MOIS[i]} : ${eur(c.revenus)} de revenus, ${eur(c.epargne)} d'épargne`;
+    return `<button class="ycol" data-month="${i + 1}" aria-label="${label}" title="${label}"><div class="stack" style="height:${(tot / max * 100).toFixed(2)}%">${ps.map(([n, v, col]) => `<div style="flex:${v} 0 0;background:var(${col})"></div>`).join("")}</div><span>${MOIS[i][0]}</span></button>`;
+  }).join("");
+  return `<section class="card"><h2>Mois par mois<small>touchez un mois</small></h2><div class="ychart">${cols}</div>
+    <div class="ylegend">${[["Charges", "--c-charges"], ["De côté", "--c-prov"], ["Enveloppes", "--c-env"], ["Épargne", "--c-epargne"]].map(([n, col]) => `<span><i style="background:var(${col})"></i>${n}</span>`).join("")}</div></section>`;
+}
 function vHome(S) {
   const m = app.month, c = calc(S, m), nm = m ? MOIS[m - 1] : "Année", per = m ? "du mois" : "de l'année";
   const env = c.env;
@@ -268,6 +280,7 @@ function vHome(S) {
     <section class="card"><div class="label"><span class="sw" style="background:var(--c-prov)"></span>De côté</div><div class="mid">${eur(c.provisions)}</div><div class="sub">${m ? "à virer sur les livrets" : "virés sur les livrets"}</div></section>
     <section class="card" data-tab="env" role="button"><div class="label"><span class="sw" style="background:var(--c-env)"></span>Reste à dépenser</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${eur(c.envReel)} sur ${eur(c.envPrevu)}</div></section>
   </div>
+  ${m ? "" : yearChart(S)}
   <section class="card"><h2>Où vont les ${eur(c.revenus)}<small>reste à vivre ${eur(c.rav)}</small></h2>
     <div class="flow">${segs.map(([n, v, col]) => `<div style="width:${(v / tot * 100).toFixed(2)}%;background:var(${col})" title="${n}"></div>`).join("")}</div>
     <div class="legend">${segs.map(([n, v, col]) => `<div class="it" style="border-color:var(${col})"><b>${eur(v)}</b><span>${n}</span></div>`).join("")}</div>

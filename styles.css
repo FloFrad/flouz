@@ -70,6 +70,12 @@ h1,h2,h3{font-family:var(--font-d);margin:0;letter-spacing:-.01em}
 
 .flow{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--surface-2);margin:10px 0 12px}
 .flow div{height:100%}
+.ychart{display:flex;align-items:flex-end;gap:4px;height:150px;margin-top:12px}
+.ycol{flex:1 1 0;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:stretch;gap:5px;padding:0;background:none;border:0;color:var(--muted);font-size:11px;font-weight:600;text-align:center}
+.ycol .stack{display:flex;flex-direction:column;border-radius:4px;overflow:hidden;min-height:2px}
+.ylegend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:12px;font-size:12px;color:var(--muted)}
+.ylegend span{display:inline-flex;align-items:center;gap:6px}
+.ylegend i{width:9px;height:9px;border-radius:3px}
 .legend{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px}
 .legend .it{border-left:3px solid;padding-left:8px;display:flex;flex-direction:column}
 .legend b{font-size:16px}
