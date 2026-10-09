@@ -40,20 +40,20 @@ const ICON = {
 
 /* ====================== État ====================== */
 const sb = CONFIGURED && window.supabase ? window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: "bf-auth" },
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey: "bf-auth" },
   realtime: { params: { eventsPerSecond: 5 } }
 }) : null;
 
 const app = {
   mode: LS.get("bf:mode", CONFIGURED ? "cloud" : null), // "cloud" | "demo" | null
-  screen: "loading",          // loading | welcome | login | code | household | app
+  screen: "loading",          // loading | welcome | login | household | app
   user: null,                 // {id, email}
   hid: null, household: null, members: [], myName: "",
   items: new Map(), outbox: new Map(), cursor: null,
   tab: LS.get("bf:tab", "home"), seg: LS.get("bf:seg", "revenu"),
   month: new Date().getMonth() + 1,
   sync: "ok", channel: null, flushing: false, seq: 0,
-  email: LS.get("bf:email", ""), authErr: "", busy: false
+  email: LS.get("bf:email", ""), signup: false, authErr: "", busy: false
 };
 
 /* ====================== Stockage local ====================== */
@@ -219,7 +219,7 @@ function render() {
   const scr = app.screen;
   if (scr === "loading") { root.innerHTML = `<div class="screen plain"><div class="col"><div class="brand"><img src="icons/icon-192.png" alt=""><p>Chargement…</p></div></div></div>`; return; }
   if (scr === "welcome") return root.innerHTML = vWelcome();
-  if (scr === "login" || scr === "code") return root.innerHTML = vLogin();
+  if (scr === "login") return root.innerHTML = vLogin();
   if (scr === "household") return root.innerHTML = vHousehold();
   const S = state();
   const view = { home: vHome, env: vEnv, budget: vBudget, livrets: vLivrets, settings: vSettings }[app.tab] || vHome;
@@ -402,17 +402,17 @@ function vWelcome() {
   <button class="btn ${CONFIGURED ? "line" : ""} block" data-act="demo">Essayer avec un exemple (sur ce téléphone)</button></div></div>`;
 }
 function vLogin() {
-  const code = app.screen === "code";
-  return `<div class="screen plain"><div class="col"><div class="brand"><img src="icons/icon-192.png" alt=""><h1>${code ? "Code reçu" : "Connexion"}</h1><p>${code ? `Saisissez le code envoyé à <b>${esc(app.email)}</b>.` : "Recevez un code par e-mail, sans mot de passe."}</p></div>
-  ${code ? "" : installTip()}
-  <form class="form card" id="${code ? "codeForm" : "emailForm"}">
-    ${code ? `<label class="field"><span>Code</span><input id="otp" name="otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="10" required style="font-size:24px;letter-spacing:.3em;text-align:center"></label>`
-           : `<label class="field"><span>E-mail</span><input id="email" name="email" type="email" autocomplete="email" required value="${esc(app.email)}"></label>`}
+  const su = app.signup;
+  return `<div class="screen plain"><div class="col"><div class="brand"><img src="icons/icon-192.png" alt=""><h1>${su ? "Créer un compte" : "Connexion"}</h1><p>${su ? "Choisissez un mot de passe d'au moins 8 caractères." : "Connectez-vous avec votre e-mail et votre mot de passe."}</p></div>
+  ${installTip()}
+  <form class="form card" id="loginForm">
+    <label class="field"><span>E-mail</span><input id="email" name="email" type="email" autocomplete="email" autocapitalize="off" required value="${esc(app.email)}"></label>
+    <label class="field"><span>Mot de passe</span><input id="pwd" name="pwd" type="password" autocomplete="${su ? "new-password" : "current-password"}" minlength="${su ? 8 : 1}" required></label>
     ${app.authErr ? `<p class="err">${esc(app.authErr)}</p>` : ""}
-    <button class="btn block" ${app.busy ? "disabled" : ""}>${app.busy ? "Patientez…" : code ? "Valider" : "Recevoir le code"}</button>
-    ${code ? `<button type="button" class="btn line block" data-act="backEmail">Changer d'e-mail ou renvoyer</button>` : ""}
+    <button class="btn block" ${app.busy ? "disabled" : ""}>${app.busy ? "Patientez…" : su ? "Créer mon compte" : "Se connecter"}</button>
+    <button type="button" class="btn line block" data-act="toggleSignup">${su ? "J'ai déjà un compte" : "Première fois ? Créer un compte"}</button>
   </form>
-  ${code ? "" : `<button class="btn line block" data-act="welcome">Retour</button>`}</div></div>`;
+  <button class="btn line block" data-act="welcome">Retour</button></div></div>`;
 }
 function vHousehold() {
   return `<div class="screen plain"><div class="col"><div class="brand"><h1>Votre foyer</h1><p>Créez le budget du foyer, ou rejoignez celui de votre partenaire.</p></div>
@@ -535,7 +535,7 @@ document.addEventListener("click", async e => {
     }
     case "goLogin": go("login"); break;
     case "welcome": go("welcome"); break;
-    case "backEmail": go("login"); break;
+    case "toggleSignup": app.email = $("#email")?.value.trim() || app.email; app.signup = !app.signup; app.authErr = ""; render(); break;
     case "demo": startDemo(); break;
     case "quitDemo": LS.del("bf:mode"); app.mode = CONFIGURED ? "cloud" : null; app.hid = null; app.items = new Map(); go("welcome"); break;
     case "leaveDemo": LS.set("bf:mode", "cloud"); app.mode = "cloud"; app.hid = null; app.items = new Map(); boot(); break;
@@ -585,8 +585,7 @@ document.addEventListener("submit", async e => {
   e.preventDefault();
   const f = e.target;
   if (f.id === "sheetForm") return saveSheet();
-  if (f.id === "emailForm") return sendCode(f.email.value.trim());
-  if (f.id === "codeForm") return verifyCode(f.otp.value.trim());
+  if (f.id === "loginForm") return authPassword(f.elements.email.value.trim(), f.elements.pwd.value, app.signup);
   if (f.id === "createForm") return createHousehold(f.me.value.trim(), f.home.value.trim(), f.start.value);
   if (f.id === "joinForm") return joinHousehold(f.me.value.trim(), f.code.value.trim());
 });
@@ -597,20 +596,25 @@ function clearAll() {
 }
 
 /* ---------- Auth & foyer ---------- */
-async function sendCode(email) {
-  app.email = email; LS.set("bf:email", email); app.busy = true; app.authErr = ""; render();
-  const redirectTo = location.origin + location.pathname.replace(/index\.html$/, "");
-  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: redirectTo } });
-  app.busy = false;
-  if (error) { app.authErr = /not authorized/i.test(error.message) ? "Cette adresse n'est pas autorisée par l'e-mail par défaut de Supabase : ajoutez-la à l'équipe du projet ou configurez un SMTP (voir README)."
-      : /rate|limit/i.test(error.message) ? "Trop de demandes : patientez avant de redemander un code (2 e-mails par heure avec l'e-mail par défaut de Supabase)." : "Envoi impossible : " + error.message; render(); return; }
-  go("code"); setTimeout(() => $("#otp")?.focus(), 50);
+function authError(error, signup) {
+  const m = error?.message || "";
+  if (/failed to fetch|network|load failed/i.test(m)) return "Impossible de joindre le serveur. Vérifiez la connexion.";
+  if (/rate|limit|too many/i.test(m)) return "Trop de tentatives : patientez quelques minutes.";
+  if (/not confirmed/i.test(m)) return "Compte non confirmé : la confirmation par e-mail est activée dans Supabase. Désactivez « Confirm email » puis supprimez cet utilisateur (voir README, étape 2).";
+  if (/already registered|already been registered/i.test(m)) return "Un compte existe déjà avec cet e-mail : connectez-vous.";
+  if (/password/i.test(m) && signup) return "Mot de passe refusé : " + m;
+  if (/invalid login credentials/i.test(m)) return signup ? "Création impossible : un compte existe peut-être déjà avec cet e-mail (voir README, étape 2)." : "E-mail ou mot de passe incorrect.";
+  return "Connexion impossible : " + (m || "erreur inconnue");
 }
-async function verifyCode(token) {
-  app.busy = true; app.authErr = ""; render();
-  const { data, error } = await sb.auth.verifyOtp({ email: app.email, token, type: "email" });
+async function authPassword(email, password, signup) {
+  if (signup && password.length < 8) { app.authErr = "Le mot de passe doit contenir au moins 8 caractères."; render(); return; }
+  app.email = email; LS.set("bf:email", email); app.busy = true; app.authErr = ""; render();
+  let res = signup ? await sb.auth.signUp({ email, password }) : await sb.auth.signInWithPassword({ email, password });
+  // inscription sans session : l'e-mail existe déjà ou la confirmation par e-mail est active -> on tente la connexion
+  if (signup && !res.error && !res.data?.session) res = await sb.auth.signInWithPassword({ email, password });
   app.busy = false;
-  if (error || !data?.session) { app.authErr = "Code invalide ou expiré. Redemandez-en un."; render(); return; }
+  const { data, error } = res;
+  if (error || !data?.session) { app.authErr = authError(error, signup); render(); return; }
   await afterLogin(data.session.user);
 }
 async function afterLogin(user) {

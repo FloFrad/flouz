@@ -22,20 +22,15 @@ Installation : environ 20 minutes, une seule fois.
 2. Une fois le projet prêt : **SQL Editor** → **New query** → collez tout le contenu de `supabase/schema.sql` → **Run**.
    Le message « Success. No rows returned » est normal.
 
-## 2. Configurer la connexion par code e-mail
+## 2. Configurer la connexion (e-mail + mot de passe)
 
-L'app se connecte sans mot de passe : on reçoit un code à 6 chiffres par e-mail.
+L'app se connecte avec un e-mail et un mot de passe : **aucun e-mail n'est envoyé**, donc pas de limite d'envoi ni de SMTP à configurer.
 
-1. **Authentication → Emails → Templates** :
-   - modèle **Magic Link** : remplacez le contenu par par exemple
-     `<h2>Budget familial</h2><p>Votre code de connexion : <b>{{ .Token }}</b></p>`
-   - faites de même pour le modèle **Confirm signup** (utilisé à la toute première connexion).
-2. **Authentication → URL Configuration** : *Site URL* = l'adresse GitHub Pages de l'étape 5 (vous pourrez la compléter après).
+1. **Authentication → Sign In / Providers → Email** : laissez **Enable Email provider** activé et **désactivez « Confirm email »** → **Save**.
+   (Si « Confirm email » reste activé, Supabase attend un e-mail de confirmation et la création de compte échoue.)
+2. **Authentication → URL Configuration** : *Site URL* = l'adresse GitHub Pages de l'étape 5 (par ex. `https://VOTRE-PSEUDO.github.io/flouz/`).
 
-> **Important : l'e-mail par défaut de Supabase n'envoie qu'aux membres de l'équipe du projet**, et au plus 2 e-mails par heure.
-> Deux solutions pour que votre partenaire reçoive son code :
-> - **Simple** : invitez son adresse dans votre organisation Supabase (**Organization → Team → Invite**). Les 2 e-mails/heure suffisent : on ne se reconnecte presque jamais, la session reste ouverte.
-> - **Plus souple** : branchez un service d'envoi gratuit (Brevo, Resend…) dans **Authentication → Emails → SMTP Settings**.
+> **Un compte a déjà été créé sans mot de passe ?** Si vous avez essayé l'ancienne connexion par e-mail, l'adresse existe peut-être déjà dans **Authentication → Users**. Supprimez-la (menu **⋯ → Delete user**), puis créez le compte depuis l'app.
 
 ## 3. Récupérer les clés
 
@@ -67,7 +62,7 @@ Cette clé est faite pour être publique : sans connexion, elle ne donne accès 
 Sur chaque iPhone :
 1. Ouvrez l'adresse dans **Safari** → bouton **Partager** → **Sur l'écran d'accueil** → **Ajouter**.
 2. **Ouvrez l'app depuis l'icône** (pas depuis Safari : les deux ne partagent pas la connexion).
-3. Entrez votre e-mail, puis le code reçu.
+3. Première fois : **Se connecter** → **Première fois ? Créer un compte** (e-mail + mot de passe de 8 caractères minimum). Le second téléphone crée aussi son propre compte, avec son e-mail.
 
 **Premier téléphone** : *Créer un foyer* (avec ou sans montants d'exemple).
 Allez ensuite dans **Réglages** (roue dentée) → **Partager le code**.
@@ -78,7 +73,7 @@ Allez ensuite dans **Réglages** (roue dentée) → **Partager le code**.
 1. **Bloquer les nouvelles inscriptions** : **Authentication → Sign In / Providers** → décochez **Allow new users to sign up** → **Save**.
    Vos deux comptes continuent de fonctionner ; plus personne ne peut créer de compte ni de foyer sur votre projet.
    Pour ajouter quelqu'un plus tard, recochez la case le temps de sa première connexion.
-2. **Raccourcir la validité du code e-mail** : **Authentication → Sign In / Providers → Email** → **Email OTP Expiration** : `600` secondes (10 minutes) au lieu de 3600.
+2. **Mot de passe** : dans **Authentication → Sign In / Providers → Email**, fixez **Minimum password length** à 8 ou plus.
 
 Rappel : seule la clé *anon / publishable* va dans `config.js`. La clé *service_role / secret* ne doit jamais apparaître dans l'app ni sur GitHub.
 
