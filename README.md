@@ -91,6 +91,18 @@ L'import remplace le contenu du budget.
 Si votre base Supabase existe déjà, **relancez `supabase/schema.sql`** (SQL Editor → New query → coller → Run) : il autorise le nouveau type de ligne « categorie ». Tant que ce n'est pas fait, l'app fonctionne mais affiche « Mettez à jour le SQL » et garde les catégories sur le téléphone sans les envoyer.
 Les 17 catégories de départ (12 de dépenses, 5 de revenus) sont créées au premier lancement ; modifiez-les dans **Budget → Catégories**. Les anciennes saisies reprennent la catégorie de leur enveloppe (devinée d'après son nom, modifiable dans l'enveloppe) ; le reste apparaît dans « À catégoriser ».
 
+## Importer un relevé bancaire
+
+**Réglages → Importer…** accepte aussi un fichier `releve-bancaire` (le dossier `releves/` est ignoré par git : vos relevés restent chez vous, ils ne sont jamais publiés avec le code). Contrairement à la sauvegarde JSON, il **ajoute** sans rien remplacer :
+
+- un débit devient une **dépense** (sans enveloppe, rangée sous « Relevé bancaire ») et un crédit un **revenu ponctuel** du mois ;
+- chaque opération porte une `ref` : réimporter le même fichier n'ajoute aucun doublon ;
+- les catégories sont celles proposées dans le fichier ; ce qui n'a pas pu être deviné reste dans « À catégoriser » (Analyse), à ranger d'un toucher ;
+- seules les opérations de l'année du budget sont importées.
+- `personne` et `par` (facultatifs, au niveau du fichier) fixent à qui sont attribués les revenus et les dépenses (ex. `"personne": "Commun", "par": "Compte commun"` pour le compte joint) ; sinon, c'est la personne qui importe.
+
+Format : `{"format":"releve-bancaire","operations":[{"ref":"…","date":"2026-09-08","libelle":"…","montant":-12.0,"categorie":"c-alim"}]}` (montant négatif = débit ; ids de catégories : `c-alim`, `c-auto`, `r-salaire`…).
+
 ## Bon à savoir
 
 - **Pas de réinstallation** : rien n'expire. Quand vous modifiez le code sur GitHub, l'app se met à jour à la prochaine ouverture (pensez à changer `VERSION` dans `sw.js`).

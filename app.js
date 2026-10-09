@@ -258,7 +258,7 @@ function flows(S, ms) {
   const out = [], inn = [];
   S.depenses.forEach(d => {
     if (Number(d.annee) !== Number(S.annee) || !ms.includes(Number(d.mois)) || !num(d.montant)) return;
-    out.push({ k: "depense", id: d.id, montant: num(d.montant), cat: depCat(S, d), fixe: false, titre: d.note || envName[d.enveloppe] || "Dépense", sub: `${envName[d.enveloppe] || "Enveloppe supprimée"} · ${shortDate(d.date)}` });
+    out.push({ k: "depense", id: d.id, montant: num(d.montant), cat: depCat(S, d), fixe: false, titre: d.note || envName[d.enveloppe] || "Dépense", sub: `${envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée")} · ${shortDate(d.date)}` });
   });
   S.charges.forEach(c => {
     if (!num(c.montant)) return;
@@ -429,7 +429,7 @@ function vEnv(S) {
   <section class="card"><div class="label">Reste</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${m ? MOIS[m - 1].toLowerCase() + " " : "année "}${S.annee}</div></section></div>
   <section class="card"><h2>Par enveloppe<small>touchez pour ajouter</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
   <section class="card"><h2>${m ? "Saisies du mois" : "Saisies de l'année"}<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}</small></h2><div class="list">
-    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || "Enveloppe supprimée")} · ${dfmt(d.date)}${d.par ? " · " + esc(d.par) : ""}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
+    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"))} · ${dfmt(d.date)}${d.par ? " · " + esc(d.par) : ""}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
   </div></section>`;
 }
 
@@ -729,7 +729,7 @@ function vSettings(S) {
     <label class="field"><span>Épargne commune programmée / mois</span><div class="euro"><input id="s-ep" type="text" inputmode="decimal" value="${esc(S.epargneCommune || "")}" data-setting="epargneCommune"></div></label>
   </div></section>
   <section class="card"><h2>Sauvegarde</h2>
-    <p class="note" style="margin-top:0">Importez l'export JSON de la version web (Réglages → Exporter) pour reprendre vos montants.</p>
+    <p class="note" style="margin-top:0">Importez l'export JSON de la version web pour reprendre vos montants (remplace le budget). Un fichier de relevé bancaire, lui, s'ajoute sans rien remplacer.</p>
     <div class="btnrow"><button class="btn ghost" data-act="export">Exporter</button><label class="btn ghost" for="importFile">Importer…</label></div>
     <input id="importFile" type="file" accept="application/json,.json" hidden>
     <div class="btnrow" style="margin-top:8px" id="clearZone"><button class="btn danger" data-act="askClear">Tout vider</button></div>
@@ -863,7 +863,7 @@ function saveSheet() {
   const err = m => { const e = $("#sheetErr"); e.textContent = m; e.hidden = false; };
   if (kind === "depense") {
     if (!num(d.montant)) return err("Indiquez un montant.");
-    if (!d.enveloppe) return err("Choisissez une enveloppe.");
+    if (!d.enveloppe && !d.ref) return err("Choisissez une enveloppe.");
     if (!id) { d.date = new Date().toISOString(); d.par = app.myName || ""; d.annee = state().annee; }
   } else {
     const nameF = kind === "livret" || kind === "categorie" ? "nom" : "libelle";
@@ -1125,11 +1125,36 @@ async function doExport() {
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([json], { type: "application/json" })); a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
+// Relevé bancaire : AJOUTE les opérations (débit → dépense, crédit → revenu ponctuel) sans toucher au reste.
+// Chaque opération porte une « ref » : un second import du même fichier n'ajoute rien (même une ligne supprimée ne revient pas).
+function importReleve(src) {
+  const S = state(), me = src.personne || (S.personnes.includes(app.myName) ? app.myName : S.personnes[0]); // « personne » : par ex. « Commun » pour le compte joint
+  const par = src.par != null ? src.par : app.myName || "";
+  const known = new Set([...app.items.values()].map(i => i.data && i.data.ref).filter(Boolean));
+  const n = { dep: 0, rev: 0, dup: 0, hors: 0 };
+  src.operations.forEach(o => {
+    const m = num(o.montant), day = String(o.date || ""), y = Number(day.slice(0, 4)), mo = Number(day.slice(5, 7));
+    if (!m || !o.ref || !(mo >= 1 && mo <= 12)) return;
+    if (known.has(o.ref)) { n.dup++; return; }
+    if (y !== Number(S.annee)) { n.hors++; return; }
+    known.add(o.ref);
+    if (m < 0) { put("depense", newId(), { enveloppe: "", categorie: o.categorie || "", annee: y, mois: mo, montant: -m, note: o.libelle || "", par, date: day + "T12:00:00.000Z", ref: o.ref }); n.dep++; }
+    else { put("revenu", newId(), { libelle: o.libelle || "Virement", personne: me, type: "Autre", categorie: o.categorie || "", frequence: "Ponctuel", mois: mo, montant: m, ordre: Date.now() + n.rev, ref: o.ref }); n.rev++; }
+  });
+  return n;
+}
 function doImport(file) {
   if (!file) return;
   const r = new FileReader();
   r.onload = () => {
-    try { const d = JSON.parse(r.result); if (!d || !Array.isArray(d.revenus)) throw 0; clearAll(); importState(d, { exemple: !!d.exemple }); toast("Sauvegarde importée"); }
+    try {
+      const d = JSON.parse(r.result);
+      if (d && d.format === "releve-bancaire" && Array.isArray(d.operations)) {
+        const n = importReleve(d);
+        toast(`${n.dep} dépenses et ${n.rev} revenus ajoutés` + (n.dup ? ` · ${n.dup} déjà présents` : "") + (n.hors ? ` · ${n.hors} hors année ${state().annee}` : ""));
+        return;
+      }
+      if (!d || !Array.isArray(d.revenus)) throw 0; clearAll(); importState(d, { exemple: !!d.exemple }); toast("Sauvegarde importée"); }
     catch { toast("Ce fichier n'est pas une sauvegarde du budget"); }
   };
   r.readAsText(file);
