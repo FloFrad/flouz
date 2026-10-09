@@ -1178,6 +1178,7 @@ async function createHousehold(me, home, start) {
   app.busy = true; app.authErr = ""; render();
   const { data, error } = await sb.rpc("create_household", { p_name: home, p_display_name: me });
   app.busy = false;
+  if (error && isStaleSession(error)) { await dropStaleSession(); return; }
   if (error) { app.authErr = "Création impossible : " + error.message; render(); return; }
   const h = Array.isArray(data) ? data[0] : data;
   enterHousehold(h, me);
@@ -1187,6 +1188,7 @@ async function joinHousehold(me, code) {
   app.busy = true; app.authErr = ""; render();
   const { data, error } = await sb.rpc("join_household", { p_code: code, p_display_name: me });
   app.busy = false;
+  if (error && isStaleSession(error)) { await dropStaleSession(); return; }
   if (error) { app.authErr = /inconnu/i.test(error.message) ? "Ce code ne correspond à aucun foyer." : error.message; render(); return; }
   enterHousehold(Array.isArray(data) ? data[0] : data, me);
 }
@@ -1315,8 +1317,22 @@ async function boot() {
   if (app.mode === "demo") return startDemo();
   if (!sb) { go("welcome"); return; }
   const { data } = await sb.auth.getSession();
-  if (data?.session) await afterLogin(data.session.user);
-  else go("welcome");
+  if (!data?.session) { go("welcome"); return; }
+  // getSession() ne lit que le stockage local : on vérifie auprès du serveur que le compte existe encore
+  const { error } = await sb.auth.getUser();
+  if (error && isStaleSession(error)) { await dropStaleSession(); return; }
+  await afterLogin(data.session.user);
+}
+function isStaleSession(error) {
+  return /household_members_user_id_fkey|user_not_found|does not exist|jwt|invalid claim|session.*(missing|not found)/i.test(error?.message || "")
+    || [401, 403, 404].includes(error?.status);
+}
+async function dropStaleSession() {
+  await sb.auth.signOut({ scope: "local" }).catch(() => {});
+  app.user = null; LS.del("bf:last");
+  app.screen = "login";
+  app.authErr = "Votre session n'est plus valide (compte supprimé ou expiré). Reconnectez-vous ou recréez le compte.";
+  render();
 }
 if (sb) sb.auth.onAuthStateChange((ev) => { if (ev === "SIGNED_OUT" && app.screen === "app" && app.mode === "cloud") go("welcome"); });
 if ("serviceWorker" in navigator && location.protocol === "https:") {
