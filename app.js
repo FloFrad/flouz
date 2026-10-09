@@ -551,10 +551,57 @@ function vAnalyse(S) {
   const todo = out.filter(x => !x.cat).length + inn.filter(x => !x.cat).length;
   const nudge = todo ? `<button class="card nudge" data-aseg="${out.some(x => !x.cat) ? "sorties" : "entrees"}"><span class="ico sm" style="background:${UNCAT.couleur}">${UNCAT.icone}</span><span class="main"><b>${plural(todo, "ligne")} à catégoriser</b><small>Touchez pour les ranger</small></span>${ICON.chev}</button>` : "";
   let body;
-  if (seg === "all") body = vOverview(S, per, out, totIn, totOut) + nudge;
+  if (seg === "all") body = vOverview(S, per, out, totIn, totOut) + evolution(S, "all") + nudge;
   else if (seg === "rec") body = vRec(S, per);
   else body = vFlow(S, per, seg === "sorties" ? "depense" : "revenu", seg === "sorties" ? out : inn, seg === "sorties" ? totOut : totIn);
   return `${head("Analyse")}${nav}${body}`;
+}
+
+/* Évolution mois par mois de l'année : entrées / sorties (mode "all"), ou un seul flux empilé par catégorie. */
+function evolution(S, mode) {
+  const now = new Date(), nowY = now.getFullYear(), nowM = now.getMonth() + 1;
+  const data = ALL_MONTHS.map(m => { const f = flows(S, [m]); return { m, out: f.out, inn: f.inn, tIn: sumOf(f.inn), tOut: sumOf(f.out), fut: S.annee > nowY || (S.annee === nowY && m > nowM) }; });
+  const one = mode === "all" ? null : (mode === "revenu" ? "inn" : "out"), tot = d => (one === "inn" ? d.tIn : d.tOut);
+  const peak = Math.max(...data.map(d => mode === "all" ? Math.max(d.tIn, d.tOut) : tot(d)), 1);
+  const step = 10 ** Math.floor(Math.log10(peak)), top = [1, 2, 2.5, 5, 10].map(k => k * step).find(v => v >= peak);
+  const W = 340, H = 176, L = 36, T = 8, B = 22, slot = (W - L - 4) / 12, ph = H - T - B;
+  const y = v => T + ph - v / top * ph;
+  const short = v => (v >= 1000 ? String(+(v / 1000).toFixed(1)).replace(".", ",") + " k" : String(Math.round(v)));
+  let g = [0, .5, 1].map(f => `<line x1="${L}" x2="${W}" y1="${y(top * f).toFixed(1)}" y2="${y(top * f).toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${L - 5}" y="${y(top * f).toFixed(1)}" text-anchor="end" dominant-baseline="central" class="evo-t">${short(top * f)}</text>`).join("");
+  // ordre d'empilement : les plus grosses catégories de l'année en bas
+  let order = [];
+  if (one) { const yt = new Map(); data.forEach(d => d[one].forEach(x => yt.set(x.cat || "", (yt.get(x.cat || "") || 0) + x.montant))); order = [...yt.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); }
+  data.forEach((d, i) => {
+    const x0 = L + i * slot, sel = app.month === d.m, op = d.fut ? .45 : 1;
+    if (sel) g += `<rect x="${(x0 + 1).toFixed(1)}" y="${T - 4}" width="${(slot - 2).toFixed(1)}" height="${ph + 4}" rx="6" fill="var(--accent-soft)"/>`;
+    if (mode === "all") {
+      const bw = slot * .34, h = v => v / top * ph;
+      g += `<g opacity="${op}"><rect x="${(x0 + slot / 2 - bw - .8).toFixed(1)}" y="${y(d.tIn).toFixed(1)}" width="${bw.toFixed(1)}" height="${h(d.tIn).toFixed(1)}" rx="2" fill="var(--accent)"/><rect x="${(x0 + slot / 2 + .8).toFixed(1)}" y="${y(d.tOut).toFixed(1)}" width="${bw.toFixed(1)}" height="${h(d.tOut).toFixed(1)}" rx="2" fill="var(--c-env)"/></g>`;
+    } else {
+      const bw = slot * .6; let acc = 0;
+      g += `<g opacity="${op}">` + order.map(k => {
+        const v = d[one].filter(x => (x.cat || "") === k).reduce((a, x) => a + x.montant, 0);
+        if (!v) return "";
+        const r = `<rect x="${(x0 + (slot - bw) / 2).toFixed(1)}" y="${y(acc + v).toFixed(1)}" width="${bw.toFixed(1)}" height="${(v / top * ph).toFixed(1)}" fill="${esc(catMeta(S, k).couleur)}"/>`;
+        acc += v; return r;
+      }).join("") + `</g>`;
+    }
+    g += `<text x="${(x0 + slot / 2).toFixed(1)}" y="${H - 7}" text-anchor="middle" class="evo-t${sel ? " sel" : ""}">${MOIS[i][0]}</text>`;
+    g += `<rect data-month="${d.m}" x="${x0.toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${H}" fill="transparent" tabindex="0" role="button" aria-label="${MOIS[i]} : entrées ${eurc(d.tIn)}, sorties ${eurc(d.tOut)}"/>`;
+  });
+  // résumé : le mois touché, ou la moyenne de l'année
+  const sel = app.month ? data[app.month - 1] : null, avg = k => data.reduce((a, d) => a + d[k], 0) / 12;
+  const cap = sel
+    ? `<b>${MOIS[sel.m - 1]}</b>${sel.fut ? " (prévision)" : ""}`
+    : `<b>Moyenne par mois</b>`;
+  const vIn = sel ? sel.tIn : avg("tIn"), vOut = sel ? sel.tOut : avg("tOut");
+  const sums = mode === "all"
+    ? `<span><i style="background:var(--accent)"></i>Entrées ${eurc(vIn)}</span><span><i style="background:var(--c-env)"></i>Sorties ${eurc(vOut)}</span>`
+    : `<span>${mode === "revenu" ? "Entrées" : "Sorties"} ${eurc(mode === "revenu" ? vIn : vOut)}</span>`;
+  return `<section class="card evo"><h2>Évolution<small>${mode === "all" ? "entrées et sorties" : "par catégorie"} · ${S.annee}</small></h2>
+    <svg viewBox="0 0 ${W} ${H}" role="group" aria-label="Évolution mois par mois">${g}</svg>
+    <div class="evo-cap">${cap}${sums}</div>
+    <p class="note" style="margin:6px 0 0">Touchez un mois pour l'afficher. Les mois à venir (pâles) ne comptent que les charges et revenus réguliers.</p></section>`;
 }
 
 function vOverview(S, per, out, totIn, totOut) {
@@ -606,6 +653,7 @@ function vFlow(S, per, sens, list, total) {
     <div class="aseg two" role="group" aria-label="Affichage"><button data-aview="cat" aria-pressed="${mode === "cat"}">Catégories</button><button data-aview="simple" aria-pressed="${mode === "simple"}">Simplifié</button></div>
   </section>
   ${budgetCard}
+  ${evolution(S, sens)}
   <section class="card"><div class="btnrow"><button class="btn line" data-new="categorie" data-sens="${sens}">Créer une catégorie ${ICON.plus.replace("<svg", '<svg width="16" height="16"')}</button><button class="btn line" data-act="manageCats" style="flex:0 0 auto">Gérer</button></div>
     <div class="list" style="margin-top:6px">${rows || `<p class="empty">Aucune ${sens === "depense" ? "dépense" : "entrée"} sur cette période.</p>`}</div></section>`;
 }

@@ -200,6 +200,14 @@ h1,h2,h3{font-family:var(--font-d);margin:0;letter-spacing:-.01em}
 .picks.colors button[aria-pressed="true"]{border-color:var(--ink);box-shadow:0 0 0 2px var(--surface) inset}
 .chips.cats button[aria-pressed="true"]{background:var(--cc);border-color:var(--cc);color:#fff}
 
+.evo svg{display:block;width:100%;height:auto;margin-top:4px}
+.evo svg [data-month]{cursor:pointer;outline:none}
+.evo-t{font-size:9.5px;fill:var(--muted);font-weight:600}
+.evo-t.sel{fill:var(--ink);font-weight:800}
+.evo-cap{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;margin-top:8px;font-size:14px}
+.evo-cap span{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+.evo-cap i{width:9px;height:9px;border-radius:3px;display:inline-block}
+
 /* ---------- tab bar ---------- */
 .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:20;background:color-mix(in srgb,var(--surface) 88%,transparent);backdrop-filter:saturate(1.6) blur(16px);-webkit-backdrop-filter:saturate(1.6) blur(16px);border-top:1px solid var(--line);padding:6px 8px calc(6px + var(--sab));display:grid;grid-template-columns:repeat(6,1fr);align-items:end}
 .tabbar button{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10.5px;font-weight:600;color:var(--muted);padding:4px 0}
