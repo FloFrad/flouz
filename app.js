@@ -362,6 +362,30 @@ function yearChart(S) {
   return `<section class="card"><h2>Mois par mois<small>touchez un mois</small></h2><div class="ychart">${cols}</div>
     <div class="ylegend">${[["Charges", "--c-charges"], ["De côté", "--c-prov"], ["Enveloppes", "--c-env"], ["Épargne", "--c-epargne"]].map(([n, col]) => `<span><i style="background:var(${col})"></i>${n}</span>`).join("")}</div></section>`;
 }
+function savingsChart(S) {
+  const cum = []; let t = 0;
+  for (let i = 1; i <= 12; i++) { t += calc(S, i).epargne; cum.push(t); }
+  const now = new Date(), cur = Number(S.annee) < now.getFullYear() ? 12 : Number(S.annee) > now.getFullYear() ? 0 : now.getMonth() + 1;
+  const W = 340, H = 150, x0 = 8, x1 = W - 8, top = 14, bot = 116;
+  const lo = Math.min(0, ...cum), hi = Math.max(0, ...cum);
+  const x = i => x0 + i * (x1 - x0) / 11, y = v => bot - (v - lo) / (hi - lo || 1) * (bot - top);
+  const pts = cum.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+  const real = pts.slice(0, Math.max(cur, 1)), proj = pts.slice(Math.max(cur, 1) - 1);
+  const area = `M${x(0).toFixed(1)},${y(0).toFixed(1)} L${pts.join(" L")} L${x(11).toFixed(1)},${y(0).toFixed(1)} Z`;
+  const last = cum[11], k = Math.max(cur, 1) - 1;
+  const lbl = `Épargne cumulée : ${eur(last)} à la fin de l'année`;
+  return `<section class="card"><h2>Épargne cumulée<small>${eur(last)} fin d'année</small></h2>
+    <svg class="schart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${lbl}">
+      <path d="${area}" fill="var(--c-epargne)" opacity=".14"/>
+      <line x1="${x0}" x2="${x1}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="${lo < 0 ? "var(--neg)" : "var(--line)"}" stroke-dasharray="${lo < 0 ? "3 3" : "none"}"/>
+      ${cur < 12 ? `<polyline points="${proj.join(" ")}" fill="none" stroke="var(--c-epargne)" stroke-width="2" stroke-dasharray="4 4" stroke-linecap="round" stroke-linejoin="round" opacity=".7"/>` : ""}
+      ${cur > 0 ? `<polyline points="${real.join(" ")}" fill="none" stroke="var(--c-epargne)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>` : ""}
+      ${cur > 0 ? `<circle cx="${x(k).toFixed(1)}" cy="${y(cum[k]).toFixed(1)}" r="4" fill="var(--c-epargne)"/>` : ""}
+      <circle cx="${x(11).toFixed(1)}" cy="${y(last).toFixed(1)}" r="3.2" fill="var(--bg)" stroke="var(--c-epargne)" stroke-width="2"/>
+      ${cum.map((v, i) => `<g data-month="${i + 1}" style="cursor:pointer"><title>${MOIS[i]} : ${eur(v)} cumulés</title><rect x="${(x(i) - 11).toFixed(1)}" y="0" width="22" height="${H}" fill="transparent"/><text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--muted)">${MOIS[i][0]}</text></g>`).join("")}
+    </svg>
+    <p class="note" style="margin:6px 0 0">${cur > 0 && cur < 12 ? `${eur(cum[k])} fin ${MOIS[k].toLowerCase()} · trait plein : jusqu'à ce mois, pointillés : prévision.` : cur === 0 ? "Prévision sur l'année." : "Cumul des 12 mois."}</p></section>`;
+}
 function vHome(S) {
   const m = app.month, c = calc(S, m), nm = m ? MOIS[m - 1] : "Année", per = m ? "du mois" : "de l'année";
   const env = c.env;
@@ -377,7 +401,7 @@ function vHome(S) {
     <section class="card"><div class="label"><span class="sw" style="background:var(--c-prov)"></span>De côté</div><div class="mid">${eur(c.provisions)}</div><div class="sub">${m ? "à virer sur les livrets" : "virés sur les livrets"}</div></section>
     <section class="card" data-tab="env" role="button"><div class="label"><span class="sw" style="background:var(--c-env)"></span>Reste à dépenser</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${eur(c.envReel)} sur ${eur(c.envPrevu)}</div></section>
   </div>
-  ${m ? "" : yearChart(S)}
+  ${m ? "" : yearChart(S) + savingsChart(S)}
   <section class="card"><h2>Où vont les ${eur(c.revenus)}<small>reste à vivre ${eur(c.rav)}</small></h2>
     <div class="flow">${segs.map(([n, v, col]) => `<div style="width:${(v / tot * 100).toFixed(2)}%;background:var(${col})" title="${n}"></div>`).join("")}</div>
     <div class="legend">${segs.map(([n, v, col]) => `<div class="it" style="border-color:var(${col})"><b>${eur(v)}</b><span>${n}</span></div>`).join("")}</div>
