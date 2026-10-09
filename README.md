@@ -9,6 +9,7 @@ Elle fonctionne aussi hors ligne : ce que vous saisissez part dès que le résea
 - **Accueil** : pour le mois choisi, l'épargne possible, ce qu'il faut mettre de côté sur les livrets et ce qu'il reste à dépenser dans les enveloppes.
 - **Bouton +** : saisir une dépense en 3 secondes (montant → enveloppe → Ajouter). La catégorie suit l'enveloppe, et se change d'un toucher.
 - **Dépenses** : l'état de chaque enveloppe et la liste des saisies du mois, avec qui les a faites.
+- **Recherche** : la loupe en haut de **Accueil** et de **Dépenses** ouvre une recherche sur toutes les saisies, revenus et charges. Tapez plusieurs mots (ils doivent tous correspondre) : un libellé, une enveloppe, une catégorie, une personne, un montant (`45`, `45,50`, `>100`, `<20`, `50..120`) ou une date (`mars`, `2026`, `12/03/2026`, `03/2026`, `>=01/03/2026`, `01/03..15/03`). Touchez un résultat pour le modifier.
 - **Analyse** : pour le mois (ou toute l'année), la balance entrées / sorties, un anneau des dépenses (ou des revenus) par catégorie, le budget consommé, les récurrences. Touchez une catégorie pour voir ses lignes.
 - **Budget** : revenus, charges mensuelles, dépenses annuelles à provisionner, enveloppes, et **Catégories** (créer, renommer, choisir icône et couleur, supprimer).
 - **Livrets** : solde projeté de chaque livret mois par mois (alerte s'il manquera de l'argent), virements de chacun vers le compte joint, mois type.
