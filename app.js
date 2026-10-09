@@ -362,6 +362,30 @@ function yearChart(S) {
   return `<section class="card"><h2>Mois par mois<small>touchez un mois</small></h2><div class="ychart">${cols}</div>
     <div class="ylegend">${[["Charges", "--c-charges"], ["De côté", "--c-prov"], ["Enveloppes", "--c-env"], ["Épargne", "--c-epargne"]].map(([n, col]) => `<span><i style="background:var(${col})"></i>${n}</span>`).join("")}</div></section>`;
 }
+function savingsChart(S) {
+  const cum = []; let t = 0;
+  for (let i = 1; i <= 12; i++) { t += calc(S, i).epargne; cum.push(t); }
+  const now = new Date(), cur = Number(S.annee) < now.getFullYear() ? 12 : Number(S.annee) > now.getFullYear() ? 0 : now.getMonth() + 1;
+  const W = 340, H = 150, x0 = 8, x1 = W - 8, top = 14, bot = 116;
+  const lo = Math.min(0, ...cum), hi = Math.max(0, ...cum);
+  const x = i => x0 + i * (x1 - x0) / 11, y = v => bot - (v - lo) / (hi - lo || 1) * (bot - top);
+  const pts = cum.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+  const real = pts.slice(0, Math.max(cur, 1)), proj = pts.slice(Math.max(cur, 1) - 1);
+  const area = `M${x(0).toFixed(1)},${y(0).toFixed(1)} L${pts.join(" L")} L${x(11).toFixed(1)},${y(0).toFixed(1)} Z`;
+  const last = cum[11], k = Math.max(cur, 1) - 1;
+  const lbl = `Épargne cumulée : ${eur(last)} à la fin de l'année`;
+  return `<section class="card"><h2>Épargne cumulée<small>${eur(last)} fin d'année</small></h2>
+    <svg class="schart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${lbl}">
+      <path d="${area}" fill="var(--c-epargne)" opacity=".14"/>
+      <line x1="${x0}" x2="${x1}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="${lo < 0 ? "var(--neg)" : "var(--line)"}" stroke-dasharray="${lo < 0 ? "3 3" : "none"}"/>
+      ${cur < 12 ? `<polyline points="${proj.join(" ")}" fill="none" stroke="var(--c-epargne)" stroke-width="2" stroke-dasharray="4 4" stroke-linecap="round" stroke-linejoin="round" opacity=".7"/>` : ""}
+      ${cur > 0 ? `<polyline points="${real.join(" ")}" fill="none" stroke="var(--c-epargne)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>` : ""}
+      ${cur > 0 ? `<circle cx="${x(k).toFixed(1)}" cy="${y(cum[k]).toFixed(1)}" r="4" fill="var(--c-epargne)"/>` : ""}
+      <circle cx="${x(11).toFixed(1)}" cy="${y(last).toFixed(1)}" r="3.2" fill="var(--bg)" stroke="var(--c-epargne)" stroke-width="2"/>
+      ${cum.map((v, i) => `<g data-month="${i + 1}" style="cursor:pointer"><title>${MOIS[i]} : ${eur(v)} cumulés</title><rect x="${(x(i) - 11).toFixed(1)}" y="0" width="22" height="${H}" fill="transparent"/><text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--muted)">${MOIS[i][0]}</text></g>`).join("")}
+    </svg>
+    <p class="note" style="margin:6px 0 0">${cur > 0 && cur < 12 ? `${eur(cum[k])} fin ${MOIS[k].toLowerCase()} · trait plein : jusqu'à ce mois, pointillés : prévision.` : cur === 0 ? "Prévision sur l'année." : "Cumul des 12 mois."}</p></section>`;
+}
 function vHome(S) {
   const m = app.month, c = calc(S, m), nm = m ? MOIS[m - 1] : "Année", per = m ? "du mois" : "de l'année";
   const env = c.env;
@@ -377,7 +401,7 @@ function vHome(S) {
     <section class="card"><div class="label"><span class="sw" style="background:var(--c-prov)"></span>De côté</div><div class="mid">${eur(c.provisions)}</div><div class="sub">${m ? "à virer sur les livrets" : "virés sur les livrets"}</div></section>
     <section class="card" data-tab="env" role="button"><div class="label"><span class="sw" style="background:var(--c-env)"></span>Reste</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${eur(c.envReel)} sur ${eur(c.envPrevu)}</div></section>
   </div>
-  ${m ? "" : yearChart(S)}
+  ${m ? "" : yearChart(S) + savingsChart(S)}
   <section class="card"><h2>Où vont les ${eur(c.revenus)}<small>reste à vivre ${eur(c.rav)}</small></h2>
     <div class="flow">${segs.map(([n, v, col]) => `<div style="width:${(v / tot * 100).toFixed(2)}%;background:var(${col})" title="${n}"></div>`).join("")}</div>
     <div class="legend">${segs.map(([n, v, col]) => `<div class="it" style="border-color:var(${col})"><b>${eur(v)}</b><span>${n}</span></div>`).join("")}</div>
@@ -527,10 +551,57 @@ function vAnalyse(S) {
   const todo = out.filter(x => !x.cat).length + inn.filter(x => !x.cat).length;
   const nudge = todo ? `<button class="card nudge" data-aseg="${out.some(x => !x.cat) ? "sorties" : "entrees"}"><span class="ico sm" style="background:${UNCAT.couleur}">${UNCAT.icone}</span><span class="main"><b>${plural(todo, "ligne")} à catégoriser</b><small>Touchez pour les ranger</small></span>${ICON.chev}</button>` : "";
   let body;
-  if (seg === "all") body = vOverview(S, per, out, totIn, totOut) + nudge;
+  if (seg === "all") body = vOverview(S, per, out, totIn, totOut) + evolution(S, "all") + nudge;
   else if (seg === "rec") body = vRec(S, per);
   else body = vFlow(S, per, seg === "sorties" ? "depense" : "revenu", seg === "sorties" ? out : inn, seg === "sorties" ? totOut : totIn);
   return `${head("Analyse")}${nav}${body}`;
+}
+
+/* Évolution mois par mois de l'année : entrées / sorties (mode "all"), ou un seul flux empilé par catégorie. */
+function evolution(S, mode) {
+  const now = new Date(), nowY = now.getFullYear(), nowM = now.getMonth() + 1;
+  const data = ALL_MONTHS.map(m => { const f = flows(S, [m]); return { m, out: f.out, inn: f.inn, tIn: sumOf(f.inn), tOut: sumOf(f.out), fut: S.annee > nowY || (S.annee === nowY && m > nowM) }; });
+  const one = mode === "all" ? null : (mode === "revenu" ? "inn" : "out"), tot = d => (one === "inn" ? d.tIn : d.tOut);
+  const peak = Math.max(...data.map(d => mode === "all" ? Math.max(d.tIn, d.tOut) : tot(d)), 1);
+  const step = 10 ** Math.floor(Math.log10(peak)), top = [1, 2, 2.5, 5, 10].map(k => k * step).find(v => v >= peak);
+  const W = 340, H = 176, L = 36, T = 8, B = 22, slot = (W - L - 4) / 12, ph = H - T - B;
+  const y = v => T + ph - v / top * ph;
+  const short = v => (v >= 1000 ? String(+(v / 1000).toFixed(1)).replace(".", ",") + " k" : String(Math.round(v)));
+  let g = [0, .5, 1].map(f => `<line x1="${L}" x2="${W}" y1="${y(top * f).toFixed(1)}" y2="${y(top * f).toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${L - 5}" y="${y(top * f).toFixed(1)}" text-anchor="end" dominant-baseline="central" class="evo-t">${short(top * f)}</text>`).join("");
+  // ordre d'empilement : les plus grosses catégories de l'année en bas
+  let order = [];
+  if (one) { const yt = new Map(); data.forEach(d => d[one].forEach(x => yt.set(x.cat || "", (yt.get(x.cat || "") || 0) + x.montant))); order = [...yt.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); }
+  data.forEach((d, i) => {
+    const x0 = L + i * slot, sel = app.month === d.m, op = d.fut ? .45 : 1;
+    if (sel) g += `<rect x="${(x0 + 1).toFixed(1)}" y="${T - 4}" width="${(slot - 2).toFixed(1)}" height="${ph + 4}" rx="6" fill="var(--accent-soft)"/>`;
+    if (mode === "all") {
+      const bw = slot * .34, h = v => v / top * ph;
+      g += `<g opacity="${op}"><rect x="${(x0 + slot / 2 - bw - .8).toFixed(1)}" y="${y(d.tIn).toFixed(1)}" width="${bw.toFixed(1)}" height="${h(d.tIn).toFixed(1)}" rx="2" fill="var(--accent)"/><rect x="${(x0 + slot / 2 + .8).toFixed(1)}" y="${y(d.tOut).toFixed(1)}" width="${bw.toFixed(1)}" height="${h(d.tOut).toFixed(1)}" rx="2" fill="var(--c-env)"/></g>`;
+    } else {
+      const bw = slot * .6; let acc = 0;
+      g += `<g opacity="${op}">` + order.map(k => {
+        const v = d[one].filter(x => (x.cat || "") === k).reduce((a, x) => a + x.montant, 0);
+        if (!v) return "";
+        const r = `<rect x="${(x0 + (slot - bw) / 2).toFixed(1)}" y="${y(acc + v).toFixed(1)}" width="${bw.toFixed(1)}" height="${(v / top * ph).toFixed(1)}" fill="${esc(catMeta(S, k).couleur)}"/>`;
+        acc += v; return r;
+      }).join("") + `</g>`;
+    }
+    g += `<text x="${(x0 + slot / 2).toFixed(1)}" y="${H - 7}" text-anchor="middle" class="evo-t${sel ? " sel" : ""}">${MOIS[i][0]}</text>`;
+    g += `<rect data-month="${d.m}" x="${x0.toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${H}" fill="transparent" tabindex="0" role="button" aria-label="${MOIS[i]} : entrées ${eurc(d.tIn)}, sorties ${eurc(d.tOut)}"/>`;
+  });
+  // résumé : le mois touché, ou la moyenne de l'année
+  const sel = app.month ? data[app.month - 1] : null, avg = k => data.reduce((a, d) => a + d[k], 0) / 12;
+  const cap = sel
+    ? `<b>${MOIS[sel.m - 1]}</b>${sel.fut ? " (prévision)" : ""}`
+    : `<b>Moyenne par mois</b>`;
+  const vIn = sel ? sel.tIn : avg("tIn"), vOut = sel ? sel.tOut : avg("tOut");
+  const sums = mode === "all"
+    ? `<span><i style="background:var(--accent)"></i>Entrées ${eurc(vIn)}</span><span><i style="background:var(--c-env)"></i>Sorties ${eurc(vOut)}</span>`
+    : `<span>${mode === "revenu" ? "Entrées" : "Sorties"} ${eurc(mode === "revenu" ? vIn : vOut)}</span>`;
+  return `<section class="card evo"><h2>Évolution<small>${mode === "all" ? "entrées et sorties" : "par catégorie"} · ${S.annee}</small></h2>
+    <svg viewBox="0 0 ${W} ${H}" role="group" aria-label="Évolution mois par mois">${g}</svg>
+    <div class="evo-cap">${cap}${sums}</div>
+    <p class="note" style="margin:6px 0 0">Touchez un mois pour l'afficher. Les mois à venir (pâles) ne comptent que les charges et revenus réguliers.</p></section>`;
 }
 
 function vOverview(S, per, out, totIn, totOut) {
@@ -582,6 +653,7 @@ function vFlow(S, per, sens, list, total) {
     <div class="aseg two" role="group" aria-label="Affichage"><button data-aview="cat" aria-pressed="${mode === "cat"}">Catégories</button><button data-aview="simple" aria-pressed="${mode === "simple"}">Simplifié</button></div>
   </section>
   ${budgetCard}
+  ${evolution(S, sens)}
   <section class="card"><div class="btnrow"><button class="btn line" data-new="categorie" data-sens="${sens}">Créer une catégorie ${ICON.plus.replace("<svg", '<svg width="16" height="16"')}</button><button class="btn line" data-act="manageCats" style="flex:0 0 auto">Gérer</button></div>
     <div class="list" style="margin-top:6px">${rows || `<p class="empty">Aucune ${sens === "depense" ? "dépense" : "entrée"} sur cette période.</p>`}</div></section>`;
 }
