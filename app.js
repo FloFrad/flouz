@@ -177,9 +177,16 @@ function state() {
 }
 const setSettings = patch => { const S = state(); const cur = { annee: S.annee, personnes: S.personnes, repartition: S.repartition, epargneCommune: S.epargneCommune, exemple: S.exemple }; put("settings", "settings", { ...cur, ...patch }); };
 
-function reel(S, envId, m) { return S.depenses.filter(d => d.enveloppe === envId && Number(d.annee) === Number(S.annee) && Number(d.mois) === m).reduce((a, d) => a + num(d.montant), 0); }
+/* m = 0 → toute l'année */
+function reel(S, envId, m) { return S.depenses.filter(d => d.enveloppe === envId && Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m)).reduce((a, d) => a + num(d.montant), 0); }
 function revMonth(r, m) { return r.frequence === "Mensuel" ? num(r.montant) : (Number(r.mois) === m ? num(r.montant) : 0); }
 function calc(S, m) {
+  if (m === 0) {
+    const cs = Array.from({ length: 12 }, (_, i) => calc(S, i + 1));
+    const sum = k => cs.reduce((a, c) => a + c[k], 0);
+    return { revenus: sum("revenus"), revReg: sum("revReg"), charges: sum("charges"), provisions: sum("provisions"), envPrevu: sum("envPrevu"), envReel: sum("envReel"),
+      env: sum("env"), rav: sum("rav"), epargne: sum("epargne"), resteEnv: sum("resteEnv") };
+  }
   const revenus = S.revenus.reduce((a, r) => a + revMonth(r, m), 0);
   const revReg = S.revenus.filter(r => r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0);
   const charges = S.charges.reduce((a, c) => a + num(c.montant), 0);
@@ -188,7 +195,7 @@ function calc(S, m) {
   const envReel = S.enveloppes.reduce((a, e) => a + reel(S, e.id, m), 0);
   const rav = revenus - charges - provisions;
   const epargne = rav - Math.max(envPrevu, envReel);
-  return { revenus, revReg, charges, provisions, envPrevu, envReel, rav, epargne, resteEnv: envPrevu - envReel };
+  return { revenus, revReg, charges, provisions, envPrevu, envReel, env: Math.max(envPrevu, envReel), rav, epargne, resteEnv: envPrevu - envReel };
 }
 function livretStats(S, l) {
   const mens = S.provisions.filter(p => p.livret === l.id).reduce((a, p) => a + num(p.montant) / 12, 0);
@@ -236,7 +243,7 @@ function head(title, extra = `<button class="iconbtn" data-tab="settings" aria-l
 }
 function monthsBar(S) {
   const ech = new Set(S.provisions.map(p => Number(p.mois)));
-  return `<div class="months" role="group" aria-label="Mois">${MC.map((n, i) => `<button data-month="${i + 1}" aria-pressed="${app.month === i + 1}">${n}${ech.has(i + 1) ? '<span class="dot"></span>' : ""}</button>`).join("")}</div>`;
+  return `<div class="months" role="group" aria-label="Mois"><button data-month="0" aria-pressed="${app.month === 0}">Année</button>${MC.map((n, i) => `<button data-month="${i + 1}" aria-pressed="${app.month === i + 1}">${n}${ech.has(i + 1) ? '<span class="dot"></span>' : ""}</button>`).join("")}</div>`;
 }
 function tabbar() {
   const t = (k, label, icon) => `<button data-tab="${k}" ${app.tab === k ? 'aria-current="page"' : ""}>${icon}<span>${label}</span></button>`;
@@ -247,48 +254,48 @@ function exampleBanner(S) {
 }
 
 function vHome(S) {
-  const m = app.month, c = calc(S, m), nm = MOIS[m - 1];
-  const env = Math.max(c.envPrevu, c.envReel);
+  const m = app.month, c = calc(S, m), nm = m ? MOIS[m - 1] : "Année", per = m ? "du mois" : "de l'année";
+  const env = c.env;
   const tot = Math.max(c.revenus, c.charges + c.provisions + env, 1);
   const segs = [["Charges", c.charges, "--c-charges"], ["À mettre de côté", c.provisions, "--c-prov"], ["Enveloppes", env, "--c-env"], ["Épargne", Math.max(c.epargne, 0), "--c-epargne"]];
-  const up = []; for (let k = 0; k < 3; k++) { const mm = ((m - 1 + k) % 12) + 1; S.provisions.filter(p => Number(p.mois) === mm).forEach(p => up.push({ mm, p })); }
+  const up = []; for (let k = 0; k < (m ? 3 : 12); k++) { const mm = m ? ((m - 1 + k) % 12) + 1 : k + 1; S.provisions.filter(p => Number(p.mois) === mm).forEach(p => up.push({ mm, p })); }
   const liv = Object.fromEntries(S.livrets.map(l => [l.id, l]));
   return `${head(`${nm} <span class="yr">${S.annee}</span>`)}
   ${monthsBar(S)}
   ${exampleBanner(S)}
-  <section class="card hero"><div class="label">Épargne possible</div><div class="big">${eur(c.epargne)}</div><div class="sub">${c.revenus > 0 ? Math.round(c.epargne / c.revenus * 100) : 0} % des revenus du mois${c.revenus > c.revReg ? " · prime incluse" : ""}</div></section>
+  <section class="card hero"><div class="label">Épargne possible</div><div class="big">${eur(c.epargne)}</div><div class="sub">${c.revenus > 0 ? Math.round(c.epargne / c.revenus * 100) : 0} % des revenus ${per}${c.revenus > c.revReg ? " · prime incluse" : ""}</div></section>
   <div class="duo">
-    <section class="card"><div class="label"><span class="sw" style="background:var(--c-prov)"></span>De côté</div><div class="mid">${eur(c.provisions)}</div><div class="sub">à virer sur les livrets</div></section>
+    <section class="card"><div class="label"><span class="sw" style="background:var(--c-prov)"></span>De côté</div><div class="mid">${eur(c.provisions)}</div><div class="sub">${m ? "à virer sur les livrets" : "virés sur les livrets"}</div></section>
     <section class="card" data-tab="env" role="button"><div class="label"><span class="sw" style="background:var(--c-env)"></span>Reste à dépenser</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${eur(c.envReel)} sur ${eur(c.envPrevu)}</div></section>
   </div>
   <section class="card"><h2>Où vont les ${eur(c.revenus)}<small>reste à vivre ${eur(c.rav)}</small></h2>
     <div class="flow">${segs.map(([n, v, col]) => `<div style="width:${(v / tot * 100).toFixed(2)}%;background:var(${col})" title="${n}"></div>`).join("")}</div>
     <div class="legend">${segs.map(([n, v, col]) => `<div class="it" style="border-color:var(${col})"><b>${eur(v)}</b><span>${n}</span></div>`).join("")}</div>
   </section>
-  <section class="card"><h2>Enveloppes<small>${nm.toLowerCase()}</small></h2><div class="list">
+  <section class="card"><h2>Enveloppes<small>${m ? nm.toLowerCase() : "sur l'année"}</small></h2><div class="list">
     ${S.enveloppes.length ? S.enveloppes.map(e => envRow(S, e, m)).join("") : `<p class="empty">Aucune enveloppe. Ajoutez-en dans Budget.</p>`}
   </div></section>
-  <section class="card"><h2>Prochaines échéances<small>3 mois</small></h2><div class="list">
+  <section class="card"><h2>${m ? "Prochaines échéances" : "Échéances de l'année"}<small>${m ? "3 mois" : "12 mois"}</small></h2><div class="list">
     ${up.length ? up.map(({ mm, p }) => `<div class="row"><div class="main"><div class="t">${esc(p.libelle)}</div><div class="s">${MOIS[mm - 1]} · ${esc(liv[p.livret]?.nom || "sans livret")}</div></div><div class="amt">${eur(p.montant)}</div></div>`).join("") : `<p class="empty">Rien de prévu.</p>`}
   </div></section>`;
 }
 function envRow(S, e, m) {
-  const r = reel(S, e.id, m), p = num(e.prevu), left = p - r, pct = p ? Math.min(r / p * 100, 100) : (r ? 100 : 0);
+  const r = reel(S, e.id, m), p = num(e.prevu) * (m ? 1 : 12), left = p - r, pct = p ? Math.min(r / p * 100, 100) : (r ? 100 : 0);
   return `<button class="row" data-act="quick" data-env="${e.id}"><div class="main"><div class="t">${esc(e.libelle)}</div><div class="bar ${left < 0 ? "over" : ""}"><i style="width:${pct}%"></i></div></div><div class="amt ${left < 0 ? "neg" : ""}">${left < 0 ? "−" + eur(-left) : eur(left)}<small>${eur(r)} / ${eur(p)}</small></div></button>`;
 }
 
 function vEnv(S) {
   const m = app.month, c = calc(S, m);
-  const deps = S.depenses.filter(d => Number(d.annee) === Number(S.annee) && Number(d.mois) === m);
+  const deps = S.depenses.filter(d => Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m));
   const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle]));
   const dfmt = d => { try { return new Date(d).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }); } catch { return ""; } };
   return `${head("Dépenses")}
   ${monthsBar(S)}
   <div class="duo"><section class="card"><div class="label">Dépensé</div><div class="mid">${eur(c.envReel)}</div><div class="sub">sur ${eur(c.envPrevu)} prévus</div></section>
-  <section class="card"><div class="label">Reste</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${MOIS[m - 1].toLowerCase()} ${S.annee}</div></section></div>
+  <section class="card"><div class="label">Reste</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${m ? MOIS[m - 1].toLowerCase() + " " : "année "}${S.annee}</div></section></div>
   <section class="card"><h2>Par enveloppe<small>touchez pour ajouter</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
-  <section class="card"><h2>Saisies du mois<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}</small></h2><div class="list">
-    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}"><div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || "Enveloppe supprimée")} · ${dfmt(d.date)}${d.par ? " · " + esc(d.par) : ""}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : `<p class="empty">Aucune dépense saisie pour ${MOIS[m - 1].toLowerCase()}. Utilisez le bouton +.</p>`}
+  <section class="card"><h2>${m ? "Saisies du mois" : "Saisies de l'année"}<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}</small></h2><div class="list">
+    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}"><div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || "Enveloppe supprimée")} · ${dfmt(d.date)}${d.par ? " · " + esc(d.par) : ""}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
   </div></section>`;
 }
 
@@ -333,14 +340,14 @@ function spark(vals, m) {
   return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">${zero}<polyline points="${vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}" fill="none" stroke="var(--c-prov)" stroke-width="1.8"/><circle cx="${x(m - 1)}" cy="${y(cur)}" r="3.2" fill="${cur < 0 ? "var(--neg)" : "var(--c-prov)"}"/></svg>`;
 }
 function vLivrets(S) {
-  const m = app.month, j = joint(S), c0 = calc(S, m);
+  const m = app.month, j = joint(S), c0 = calc(S, 1), mi = m || 12;
   const anyNeg = S.livrets.some(l => livretStats(S, l).bas < 0);
   const regC = { rev: c0.revReg, ch: c0.charges, pr: c0.provisions, en: c0.envPrevu };
   const ep = regC.rev - regC.ch - regC.pr - regC.en;
   return `${head("Livrets")}
   ${monthsBar(S)}
-  <section class="card"><h2>Livrets de provisions<small>fin ${MOIS[m - 1].toLowerCase()}</small></h2><div class="list">
-    ${S.livrets.map(l => { const st = livretStats(S, l), cur = st.soldes[m - 1]; return `<button class="row" data-edit="livret" data-id="${l.id}"><div class="main"><div class="t">${esc(l.nom)}</div><div class="s">${eur(st.mens)} / mois · point bas ${eur(st.bas)} (${MC[st.moisBas - 1]})</div><div style="margin-top:4px">${st.bas < 0 ? `<span class="pill neg">Manque ${eur(-st.bas)}</span>` : `<span class="pill ok">OK sur l'année</span>`}</div></div><div class="amt"><span class="${cur < 0 ? "neg" : ""}">${eur(cur)}</span>${spark(st.soldes, m)}</div></button>`; }).join("") || `<p class="empty">Aucun livret.</p>`}
+  <section class="card"><h2>Livrets de provisions<small>fin ${m ? MOIS[m - 1].toLowerCase() : "d'année"}</small></h2><div class="list">
+    ${S.livrets.map(l => { const st = livretStats(S, l), cur = st.soldes[mi - 1]; return `<button class="row" data-edit="livret" data-id="${l.id}"><div class="main"><div class="t">${esc(l.nom)}</div><div class="s">${eur(st.mens)} / mois · point bas ${eur(st.bas)} (${MC[st.moisBas - 1]})</div><div style="margin-top:4px">${st.bas < 0 ? `<span class="pill neg">Manque ${eur(-st.bas)}</span>` : `<span class="pill ok">OK sur l'année</span>`}</div></div><div class="amt"><span class="${cur < 0 ? "neg" : ""}">${eur(cur)}</span>${spark(st.soldes, mi)}</div></button>`; }).join("") || `<p class="empty">Aucun livret.</p>`}
     <button class="addrow" data-new="livret">${ICON.plus.replace("<svg", '<svg width="18" height="18"')} Ajouter un livret</button>
   </div>
   <div class="totals"><span>Virement total / mois</span><span>${eur(S.livrets.reduce((a, l) => a + livretStats(S, l).mens, 0))}</span></div>
@@ -445,12 +452,13 @@ const TITLES = { revenu: "Revenu", charge: "Charge mensuelle", provision: "Dépe
 function openSheet(kind, id, preset = {}) {
   const S = state();
   const it = id ? app.items.get(id) : null;
+  const cm = app.month || new Date().getMonth() + 1;
   const defaults = {
-    revenu: { personne: S.personnes[0], type: "Salaire", frequence: "Mensuel", mois: app.month },
+    revenu: { personne: S.personnes[0], type: "Salaire", frequence: "Mensuel", mois: cm },
     charge: { categorie: "Autre", compte: "Joint" },
-    provision: { mois: app.month, livret: S.livrets[0]?.id || "" },
+    provision: { mois: cm, livret: S.livrets[0]?.id || "" },
     enveloppe: {}, livret: { solde: 0 },
-    depense: { enveloppe: S.enveloppes[0]?.id || "", mois: app.month, annee: S.annee }
+    depense: { enveloppe: S.enveloppes[0]?.id || "", mois: cm, annee: S.annee }
   }[kind];
   sheet = { kind, id, draft: { ...defaults, ...(it ? it.data : {}), ...preset }, confirmDel: false };
   renderSheet(true);
