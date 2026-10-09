@@ -375,7 +375,7 @@ function vHome(S) {
   <section class="card hero"><div class="label">Épargne possible</div><div class="big">${eur(c.epargne)}</div><div class="sub">${c.revenus > 0 ? Math.round(c.epargne / c.revenus * 100) : 0} % des revenus ${per}${c.revenus > c.revReg ? " · prime incluse" : ""}</div></section>
   <div class="duo">
     <section class="card"><div class="label"><span class="sw" style="background:var(--c-prov)"></span>De côté</div><div class="mid">${eur(c.provisions)}</div><div class="sub">${m ? "à virer sur les livrets" : "virés sur les livrets"}</div></section>
-    <section class="card" data-tab="env" role="button"><div class="label"><span class="sw" style="background:var(--c-env)"></span>Reste à dépenser</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${eur(c.envReel)} sur ${eur(c.envPrevu)}</div></section>
+    <section class="card" data-tab="env" role="button"><div class="label"><span class="sw" style="background:var(--c-env)"></span>Reste</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${eur(c.envReel)} sur ${eur(c.envPrevu)}</div></section>
   </div>
   ${m ? "" : yearChart(S)}
   <section class="card"><h2>Où vont les ${eur(c.revenus)}<small>reste à vivre ${eur(c.rav)}</small></h2>
@@ -544,7 +544,7 @@ function vOverview(S, per, out, totIn, totOut) {
     <div class="big ${bal < 0 ? "neg" : ""}">${eurBig(bal)}</div>
     <div class="flowbox">
       <button data-aseg="entrees"><span class="label">Entrées ${ICON.chev}</span><b>${eurc(totIn)}</b><i class="blk" style="height:${h(totIn)}px;background:var(--accent)"></i></button>
-      <button data-aseg="sorties"><span class="label">Sorties ${ICON.chev}</span><b>${eurc(totOut)}</b><i class="blk" style="height:${h(totOut)}px;background:var(--line)"></i></button>
+      <button data-aseg="sorties"><span class="label">Sorties ${ICON.chev}</span><b>${eurc(totOut)}</b><i class="blk" style="height:${h(totOut)}px;background:var(--c-env)"></i></button>
     </div></section>
   <div class="duo">
     <button class="card tile" data-tab="budget"><div class="label">Budget</div>
