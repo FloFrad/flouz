@@ -218,6 +218,22 @@ body::before{content:"";position:fixed;top:0;left:0;right:0;height:var(--sat);z-
 .evo-cap span{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
 .evo-cap i{width:9px;height:9px;border-radius:3px;display:inline-block}
 
+/* ---------- recherche ---------- */
+#search:empty{display:none}
+.spanel{position:fixed;inset:0;z-index:35;background:var(--bg);display:flex;flex-direction:column}
+.shead{flex:0 0 auto;padding:calc(var(--sat) + 10px) max(16px,env(safe-area-inset-right,0px)) 8px max(16px,env(safe-area-inset-left,0px))}
+.sbody{flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;padding:4px max(16px,env(safe-area-inset-right,0px)) calc(var(--sab) + 28px) max(16px,env(safe-area-inset-left,0px))}
+.srow{display:flex;align-items:center;gap:12px}
+.sbox{flex:1;min-width:0;display:flex;align-items:center;gap:8px;background:var(--surface);border-radius:99px;padding:0 14px;min-height:46px;color:var(--muted);box-shadow:var(--shadow)}
+.sbox:focus-within{outline:2px solid var(--accent);outline-offset:1px}
+.sbox svg{width:19px;height:19px;flex:0 0 auto}
+.sbox input{flex:1;min-width:0;border:0;background:transparent;outline:none;color:var(--ink);padding:10px 0;-webkit-appearance:none;appearance:none}
+.sbox input::placeholder{color:var(--muted)}
+.sclose{color:var(--accent);font-weight:700;padding:8px 2px}
+.row .amt.pos{color:var(--accent)}
+.chips.ex button{font-weight:500}
+.spanel code{font:600 12.5px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--surface-2);border-radius:6px;padding:1px 5px;white-space:nowrap}
+
 /* ---------- tab bar ---------- */
 .tabbar{position:fixed;left:max(14px,env(safe-area-inset-left,0px));right:max(14px,env(safe-area-inset-right,0px));bottom:calc(10px + var(--sab));z-index:20;background:var(--surface);border-radius:30px;box-shadow:var(--tab-edge,0 0 0 0 transparent),0 10px 30px rgba(30,40,80,.16);padding:6px 6px 8px;display:grid;grid-template-columns:repeat(6,1fr);align-items:end;max-width:560px;margin:0 auto}
 .tabbar button{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10.5px;font-weight:800;color:var(--muted);padding:4px 0}

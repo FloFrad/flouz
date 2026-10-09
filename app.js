@@ -81,6 +81,7 @@ const ICON = {
   chevd: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
   prev: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>',
   next: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
   chev: '<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>'
 };
 
@@ -333,8 +334,11 @@ function render() {
   if (fid) { const el = document.getElementById(fid); if (el) el.focus({ preventScroll: true }); }
   const sel = root.querySelector('.months [aria-pressed="true"]');
   if (sel && !render._scrolled) { sel.scrollIntoView({ inline: "center", block: "nearest" }); render._scrolled = true; }
+  if (search) refreshSearch(); // une ligne modifiée depuis les résultats les met à jour
 }
-function head(title, extra = `<button class="iconbtn" data-tab="settings" aria-label="Réglages">${ICON.gear}</button>`) {
+const GEAR_BTN = `<button class="iconbtn" data-tab="settings" aria-label="Réglages">${ICON.gear}</button>`;
+const SEARCH_BTN = `<button class="iconbtn" data-act="openSearch" aria-label="Rechercher">${ICON.search}</button>`;
+function head(title, extra = GEAR_BTN) {
   const [cls, txt] = syncLabel();
   return `<header class="head"><h1>${title}</h1><div class="head-r"><span id="sync" class="sync ${cls}"><i></i><span>${txt}</span></span>${extra}</div></header>`;
 }
@@ -393,7 +397,7 @@ function vHome(S) {
   const segs = [["Charges", c.charges, "--c-charges"], ["À mettre de côté", c.provisions, "--c-prov"], ["Enveloppes", env, "--c-env"], ["Épargne", Math.max(c.epargne, 0), "--c-epargne"]];
   const up = []; for (let k = 0; k < (m ? 3 : 12); k++) { const mm = m ? ((m - 1 + k) % 12) + 1 : k + 1; S.provisions.filter(p => Number(p.mois) === mm).forEach(p => up.push({ mm, p })); }
   const liv = Object.fromEntries(S.livrets.map(l => [l.id, l]));
-  return `${head(`${nm} <span class="yr">${S.annee}</span>`)}
+  return `${head(`${nm} <span class="yr">${S.annee}</span>`, SEARCH_BTN + GEAR_BTN)}
   ${monthsBar(S)}
   ${exampleBanner(S)}
   <section class="card hero"><div class="label">Épargne possible</div><div class="big">${eur(c.epargne)}</div><div class="sub">${c.revenus > 0 ? Math.round(c.epargne / c.revenus * 100) : 0} % des revenus ${per}${c.revenus > c.revReg ? " · prime incluse" : ""}</div></section>
@@ -423,7 +427,7 @@ function vEnv(S) {
   const deps = S.depenses.filter(d => Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m));
   const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle]));
   const dfmt = shortDate;
-  return `${head("Dépenses")}
+  return `${head("Dépenses", SEARCH_BTN + GEAR_BTN)}
   ${monthsBar(S)}
   <div class="duo"><section class="card"><div class="label">Dépensé</div><div class="mid">${eur(c.envReel)}</div><div class="sub">sur ${eur(c.envPrevu)} prévus</div></section>
   <section class="card"><div class="label">Reste</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${m ? MOIS[m - 1].toLowerCase() + " " : "année "}${S.annee}</div></section></div>
@@ -813,7 +817,7 @@ function openSheet(kind, id, preset = {}) {
   sheet = { kind, id, draft, confirmDel: false };
   renderSheet(true);
 }
-function closeSheet() { sheet = null; $("#sheet").innerHTML = ""; document.body.style.overflow = ""; }
+function closeSheet() { sheet = null; $("#sheet").innerHTML = ""; document.body.style.overflow = search ? "hidden" : ""; }
 function renderSheet(first) {
   if (!sheet) return;
   const S = state(), d = sheet.draft, k = sheet.kind;
@@ -879,13 +883,152 @@ function saveSheet() {
   closeSheet();
 }
 
+/* ====================== Recherche ====================== */
+// Panneau plein écran, ouvert depuis Accueil et Dépenses. Chaque mot saisi doit correspondre (ET) ;
+// un mot correspond s'il se retrouve dans le libellé, l'enveloppe, la catégorie, la personne,
+// le montant ou la date de la ligne (OU entre ces critères).
+let search = null; // {q, type} tant que le panneau est ouvert
+const SEARCH_TYPES = [["all", "Tout"], ["depense", "Dépenses"], ["revenu", "Revenus"], ["charge", "Charges"]];
+const SEARCH_EXAMPLES = ["courses", "mars", "45", ">100", "50..120", "03/2026", "2026-03-12", ">=01/03/2026"];
+const SEARCH_MAX = 150;
+const fold = s => String(s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+const MOIS_F = MOIS.map(fold);
+const ymd = (y, m, d) => y * 10000 + m * 100 + d;
+const parseNum = s => (/^\d+(?:[.,]\d+)?$/.test(s) ? parseFloat(s.replace(",", ".")) : null);
+
+// Date saisie -> {lo, hi} (entiers aaaammjj) ; « jj/mm » sans année -> {md} (ou une vraie date si defY est fourni).
+function parseDate(s, defY) {
+  const valid = (mo, d) => mo >= 1 && mo <= 12 && d >= 1 && d <= 31;
+  const day = (y, mo, d) => (valid(mo, d) ? { lo: ymd(y, mo, d), hi: ymd(y, mo, d) } : null);
+  const month = (y, mo) => (valid(mo, 1) ? { lo: ymd(y, mo, 1), hi: ymd(y, mo, 31) } : null);
+  let m;
+  if ((m = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4}|\d{2})$/.exec(s))) return day(+m[3] < 100 ? 2000 + +m[3] : +m[3], +m[2], +m[1]);
+  if ((m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s))) return day(+m[1], +m[2], +m[3]);
+  if ((m = /^(\d{1,2})[\/-](\d{4})$/.exec(s))) return month(+m[2], +m[1]);
+  if ((m = /^(\d{4})[\/-](\d{1,2})$/.exec(s))) return month(+m[1], +m[2]);
+  if ((m = /^(\d{1,2})\/(\d{1,2})$/.exec(s))) return defY ? day(defY, +m[2], +m[1]) : valid(+m[2], +m[1]) ? { md: [+m[2], +m[1]] } : null;
+  return null;
+}
+// Période couverte par une ligne : le jour s'il est connu, sinon tout le mois ; null si elle n'a pas de date (charges, revenus réguliers).
+const entrySpan = e => (e.y ? [ymd(e.y, e.m, e.day || 1), ymd(e.y, e.m, e.day || 31)] : null);
+const overlaps = (e, dt) => { const sp = entrySpan(e); return !!sp && sp[0] <= dt.hi && sp[1] >= dt.lo; };
+function cmpAmount(v, op, n) { return op === ">" ? v > n : op === ">=" ? v >= n : op === "<" ? v < n : op === "<=" ? v <= n : Math.abs(v - n) < .005; }
+function cmpDate(e, op, dt) {
+  const sp = entrySpan(e); if (!sp) return false;
+  return op === ">" ? sp[0] > dt.hi : op === ">=" ? sp[1] >= dt.lo : op === "<" ? sp[1] < dt.lo : op === "<=" ? sp[0] <= dt.hi : overlaps(e, dt);
+}
+
+// Un mot saisi -> test sur une ligne.
+function compileToken(raw, S) {
+  const t = fold(raw).replace(/€/g, "");
+  if (!t) return null;
+  let m;
+  if ((m = /^(>=|<=|>|<|=)(.+)$/.exec(t))) {
+    const op = m[1], n = parseNum(m[2]), dt = n == null ? parseDate(m[2], S.annee) : null;
+    if (n != null) return e => cmpAmount(e.montant, op, n);
+    if (dt) return e => cmpDate(e, op, dt);
+  }
+  if ((m = /^(.+?)\.\.(.+)$/.exec(t))) {
+    const a = parseNum(m[1]), b = parseNum(m[2]);
+    if (a != null && b != null) return e => e.montant >= Math.min(a, b) - .005 && e.montant <= Math.max(a, b) + .005;
+    const da = parseDate(m[1], S.annee), db = parseDate(m[2], S.annee);
+    if (da && db) { const dt = { lo: Math.min(da.lo, db.lo), hi: Math.max(da.hi, db.hi) }; return e => overlaps(e, dt); }
+  }
+  const tests = [e => e.hay.includes(t)];
+  const n = parseNum(t.replace(/eur$/, ""));
+  if (n != null) {
+    if (/[.,]/.test(t)) tests.push(e => Math.abs(e.montant - n) < .005 || String(e.montant).replace(".", ",").startsWith(t.replace(".", ",")));
+    else {
+      tests.push(e => e.montant >= n && e.montant < n + 1);           // « 45 » trouve 45,00 à 45,99
+      if (n >= 1 && n <= 31) tests.push(e => e.day === n);            // …et le jour du mois
+      if (/^\d{4}$/.test(t)) tests.push(e => e.y === n);              // …et l'année
+    }
+  }
+  const dt = parseDate(t);
+  if (dt && dt.md) tests.push(e => e.y > 0 && e.m === dt.md[0] && e.day === dt.md[1]);
+  else if (dt) tests.push(e => overlaps(e, dt));
+  if (t.length >= 3 && MOIS_F.some(x => x.startsWith(t))) tests.push(e => e.m > 0 && MOIS_F[e.m - 1].startsWith(t));
+  return e => tests.some(f => f(e));
+}
+
+// Toutes les lignes cherchables : saisies de dépenses, revenus et charges mensuelles.
+function searchEntries(S) {
+  const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle]));
+  const list = [];
+  const add = (e, parts) => {
+    const cat = catMeta(S, e.cat);
+    list.push({ ...e, catNom: cat.nom, hay: fold([e.titre, cat.nom, ...parts, e.k === "depense" ? "depense sortie" : e.k === "revenu" ? "revenu entree" : "charge sortie"].join(" ")) });
+  };
+  S.depenses.forEach(d => {
+    const montant = num(d.montant); if (!montant) return;
+    const y = Number(d.annee) || S.annee, m = Number(d.mois) || 1, dt = new Date(d.date);
+    // le jour n'est fiable que si la date de saisie tombe bien dans le mois auquel la dépense est rattachée
+    const day = !isNaN(dt) && dt.getFullYear() === y && dt.getMonth() + 1 === m ? dt.getDate() : 0;
+    const env = envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée");
+    add({ k: "depense", id: d.id, montant, cat: depCat(S, d), y, m, day, titre: d.note || envName[d.enveloppe] || "Dépense", ctx: [env, day ? new Date(y, m - 1, day).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) : `${MOIS[m - 1]} ${y}`, d.par] }, [env, d.par]);
+  });
+  S.revenus.forEach(r => {
+    const montant = num(r.montant); if (!montant) return;
+    const mensuel = r.frequence === "Mensuel", m = Number(r.mois) || 1;
+    add({ k: "revenu", id: r.id, montant, cat: revenuCat(S, r), y: mensuel ? 0 : Number(S.annee), m: mensuel ? 0 : m, day: 0, titre: r.libelle || "Revenu", ctx: [r.personne, mensuel ? "chaque mois" : `${MOIS[m - 1]} ${S.annee}`] }, [r.personne, mensuel ? "mensuel regulier" : "ponctuel"]);
+  });
+  S.charges.forEach(c => {
+    const montant = num(c.montant); if (!montant) return;
+    add({ k: "charge", id: c.id, montant, cat: chargeCat(S, c), y: 0, m: 0, day: 0, titre: c.libelle || "Charge", ctx: ["Charge mensuelle", c.compte] }, [c.compte, "mensuelle"]);
+  });
+  return list;
+}
+function searchResults(S) {
+  const tests = search.q.trim().split(/\s+/).map(w => compileToken(w, S)).filter(Boolean);
+  if (!tests.length) return null;
+  const key = e => (e.y ? ymd(e.y, e.m, e.day) : 0);
+  return searchEntries(S)
+    .filter(e => (search.type === "all" || e.k === search.type) && tests.every(f => f(e)))
+    .sort((a, b) => key(b) - key(a) || b.montant - a.montant);
+}
+function searchRow(S, e) {
+  const sign = e.k === "revenu" ? "+" : "";
+  return `<button class="row" data-edit="${e.k}" data-id="${esc(e.id)}">${ico(catMeta(S, e.cat), "sm")}<div class="main"><div class="t">${esc(e.titre)}</div><div class="s">${esc([...e.ctx, e.catNom].filter(Boolean).join(" · "))}</div></div><div class="amt ${e.k === "revenu" ? "pos" : ""}">${sign}${eur2(e.montant)}</div>${ICON.chev}</button>`;
+}
+function searchHTML(S) {
+  const res = searchResults(S);
+  if (!res) return `<section class="card"><h2>Que chercher ?</h2>
+    <p class="note" style="margin-top:0">Tapez un ou plusieurs mots : ils doivent tous correspondre. Vous pouvez chercher par <b>libellé</b>, <b>enveloppe</b>, <b>catégorie</b>, <b>personne</b>, <b>montant</b> (<code>45</code>, <code>45,50</code>, <code>&gt;100</code>, <code>&lt;20</code>, <code>50..120</code>) ou <b>date</b> (<code>mars</code>, <code>2026</code>, <code>12/03/2026</code>, <code>03/2026</code>, <code>&gt;=01/03/2026</code>, <code>01/03..15/03</code>).</p>
+    <div class="chips ex">${SEARCH_EXAMPLES.map(x => `<button type="button" data-sq="${esc(x)}">${esc(x)}</button>`).join("")}</div></section>`;
+  const sum = k => res.filter(e => e.k === k);
+  const kv = (label, list) => (list.length ? `<div class="kv"><span>${label} <span class="muted">(${list.length})</span></span><b>${eur2(sumOf(list))}</b></div>` : "");
+  const shown = res.slice(0, SEARCH_MAX);
+  return `<section class="card"><h2>Résultats<small>${plural(res.length, "ligne")}</small></h2>
+    ${res.length ? `${kv("Dépenses", sum("depense"))}${kv("Revenus", sum("revenu"))}${kv("Charges mensuelles", sum("charge"))}
+    <div class="list" style="margin-top:6px">${shown.map(e => searchRow(S, e)).join("")}</div>
+    ${res.length > shown.length ? `<p class="note">Les ${SEARCH_MAX} premières lignes sont affichées : précisez la recherche pour voir les autres.</p>` : ""}` : `<p class="empty">Rien ne correspond à « ${esc(search.q.trim())} ».</p>`}</section>`;
+}
+function refreshSearch() {
+  const box = $("#sres"); if (!search || !box) return;
+  box.innerHTML = searchHTML(state());
+  document.querySelectorAll("#stype [data-stype]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.stype === search.type)));
+}
+function openSearch() {
+  search = { q: "", type: "all" };
+  $("#search").innerHTML = `<div class="spanel" role="dialog" aria-modal="true" aria-label="Recherche">
+    <div class="shead"><div class="col"><div class="srow"><label class="sbox">${ICON.search}<input id="q" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Libellé, montant, catégorie, date…" aria-label="Rechercher"></label><button type="button" class="sclose" data-act="closeSearch">Fermer</button></div>
+    <div class="aseg" id="stype" role="group" aria-label="Type de ligne">${SEARCH_TYPES.map(([k, l]) => `<button type="button" data-stype="${k}">${l}</button>`).join("")}</div></div></div>
+    <div class="sbody"><div class="col" id="sres"></div></div></div>`;
+  document.body.style.overflow = "hidden";
+  refreshSearch();
+  $("#q").focus();
+}
+function closeSearch() { search = null; $("#search").innerHTML = ""; document.body.style.overflow = sheet ? "hidden" : ""; }
+
 /* ====================== Actions ====================== */
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => t.hidden = true, 2400); }
 function go(screen) { app.screen = screen; app.authErr = ""; render(); }
 
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step]");
+  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq]");
   if (!t) return;
+  if (t.dataset.stype) { search.type = t.dataset.stype; refreshSearch(); return; }
+  if ("sq" in t.dataset) { search.q = t.dataset.sq; const q = $("#q"); q.value = search.q; q.focus(); refreshSearch(); return; }
   if (t.dataset.chip) {
     const d = sheet.draft; d.enveloppe = t.dataset.chip;
     if (!d._ct) { const S = state(); d.categorie = envCat(S, S.enveloppes.find(x => x.id === d.enveloppe)); } // la catégorie suit l'enveloppe tant qu'on n'a pas choisi
@@ -906,6 +1049,8 @@ document.addEventListener("click", async e => {
   switch (a) {
     case "quick": openSheet("depense", null, t.dataset.env ? { enveloppe: t.dataset.env } : {}); break;
     case "closeSheet": closeSheet(); break;
+    case "openSearch": openSearch(); break;
+    case "closeSearch": closeSearch(); break;
     case "manageCats": app.tab = "budget"; app.seg = "categorie"; LS.set("bf:tab", app.tab); LS.set("bf:seg", app.seg); window.scrollTo(0, 0); render(); break;
     case "delAsk": sheet.confirmDel = true; renderSheet(); break;
     case "delCancel": sheet.confirmDel = false; renderSheet(); break;
@@ -936,6 +1081,7 @@ document.addEventListener("click", async e => {
 });
 document.addEventListener("input", e => {
   const el = e.target;
+  if (el.id === "q" && search) { search.q = el.value; refreshSearch(); return; }
   if (el.dataset.f && sheet) {
     sheet.draft[el.dataset.f] = el.value;
     if (el.tagName === "SELECT" || (sheet.kind === "provision" && el.dataset.f === "montant")) {
@@ -971,7 +1117,10 @@ document.addEventListener("submit", async e => {
   if (f.id === "createForm") return createHousehold(f.me.value.trim(), f.home.value.trim(), f.start.value);
   if (f.id === "joinForm") return joinHousehold(f.me.value.trim(), f.code.value.trim());
 });
-document.addEventListener("keydown", e => { if (e.key === "Escape" && sheet) closeSheet(); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") { if (sheet) closeSheet(); else if (search) closeSearch(); }
+  else if (e.key === "Enter" && e.target.id === "q") e.target.blur(); // ferme le clavier pour voir les résultats
+});
 
 function clearAll() {
   for (const it of [...app.items.values()]) if (it.kind !== "settings" && it.kind !== "categorie" && !it.deleted) put(it.kind, it.id, it.data, true); // les catégories sont un réglage : on les garde
