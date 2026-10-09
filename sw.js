@@ -1,7 +1,7 @@
 // Service worker : l'app s'ouvre même hors ligne.
 // Réseau d'abord (les mises à jour arrivent dès qu'on est en ligne), cache en secours.
 // Changez VERSION à chaque mise en ligne pour nettoyer l'ancien cache.
-const VERSION = "bf-v3";
+const VERSION = "bf-v4";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "config.js", "example.js", "vendor/supabase.js",
   "manifest.webmanifest", "icons/icon-180.png", "icons/icon-192.png", "icons/icon-512.png"];
 
