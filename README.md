@@ -7,9 +7,10 @@ Elle fonctionne aussi hors ligne : ce que vous saisissez part dès que le résea
 **Ce qu'elle fait**
 
 - **Accueil** : pour le mois choisi, l'épargne possible, ce qu'il faut mettre de côté sur les livrets et ce qu'il reste à dépenser dans les enveloppes.
-- **Bouton +** : saisir une dépense en 3 secondes (montant → enveloppe → Ajouter).
+- **Bouton +** : saisir une dépense en 3 secondes (montant → enveloppe → Ajouter). La catégorie suit l'enveloppe, et se change d'un toucher.
 - **Dépenses** : l'état de chaque enveloppe et la liste des saisies du mois, avec qui les a faites.
-- **Budget** : revenus, charges mensuelles, dépenses annuelles à provisionner, enveloppes.
+- **Analyse** : pour le mois (ou toute l'année), la balance entrées / sorties, un anneau des dépenses (ou des revenus) par catégorie, le budget consommé, les récurrences. Touchez une catégorie pour voir ses lignes.
+- **Budget** : revenus, charges mensuelles, dépenses annuelles à provisionner, enveloppes, et **Catégories** (créer, renommer, choisir icône et couleur, supprimer).
 - **Livrets** : solde projeté de chaque livret mois par mois (alerte s'il manquera de l'argent), virements de chacun vers le compte joint, mois type.
 
 Installation : environ 20 minutes, une seule fois.
@@ -84,6 +85,11 @@ Dans l'app : **Réglages → Importer…** et choisissez le fichier (depuis Fich
 L'import remplace le contenu du budget.
 
 ---
+
+## Mise à jour : catégories et onglet Analyse
+
+Si votre base Supabase existe déjà, **relancez `supabase/schema.sql`** (SQL Editor → New query → coller → Run) : il autorise le nouveau type de ligne « categorie ». Tant que ce n'est pas fait, l'app fonctionne mais affiche « Mettez à jour le SQL » et garde les catégories sur le téléphone sans les envoyer.
+Les 17 catégories de départ (12 de dépenses, 5 de revenus) sont créées au premier lancement ; modifiez-les dans **Budget → Catégories**. Les anciennes saisies reprennent la catégorie de leur enveloppe (devinée d'après son nom, modifiable dans l'enveloppe) ; le reste apparaît dans « À catégoriser ».
 
 ## Bon à savoir
 

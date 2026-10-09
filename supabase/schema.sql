@@ -25,7 +25,7 @@ create table if not exists public.household_members (
 );
 
 -- Toutes les lignes du budget (réglages, livrets, revenus, charges,
--- provisions, enveloppes, dépenses). Une ligne = un élément, ce qui
+-- provisions, enveloppes, dépenses, catégories). Une ligne = un élément, ce qui
 -- permet à deux personnes de modifier le budget en même temps sans
 -- s'écraser. Les suppressions sont « douces » (deleted = true) pour
 -- que l'autre téléphone les reçoive aussi.
@@ -33,13 +33,19 @@ create table if not exists public.items (
   household_id uuid not null references public.households(id) on delete cascade,
   id           text not null,
   kind         text not null check (kind in
-                 ('settings','livret','revenu','charge','provision','enveloppe','depense')),
+                 ('settings','livret','revenu','charge','provision','enveloppe','depense','categorie')),
   data         jsonb not null default '{}'::jsonb,
   deleted      boolean not null default false,
   updated_at   timestamptz not null default now(),
   updated_by   uuid default auth.uid(),
   primary key (household_id, id)
 );
+-- Mise à jour d'une base existante : autorise le type « categorie » (onglet Analyse).
+-- Sans effet sur une base neuve ; à relancer sans risque.
+alter table public.items drop constraint if exists items_kind_check;
+alter table public.items add constraint items_kind_check check (kind in
+  ('settings','livret','revenu','charge','provision','enveloppe','depense','categorie'));
+
 create index if not exists items_household_updated_idx
   on public.items (household_id, updated_at);
 

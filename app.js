@@ -8,9 +8,50 @@
 /* ====================== Constantes ====================== */
 const MOIS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
 const MC = ["Janv.","Févr.","Mars","Avr.","Mai","Juin","Juil.","Août","Sept.","Oct.","Nov.","Déc."];
-const CATS = ["Prêts","Assurances","Énergie","Télécom","Enfants","Abonnements","Impôts","Transport","Autre"];
-const TYPES = ["Salaire","Prime","Remboursement","Aide","Autre"];
-const KINDS = ["settings","livret","revenu","charge","provision","enveloppe","depense"];
+const KINDS = ["settings","livret","revenu","charge","provision","enveloppe","depense","categorie"];
+// Catégories proposées au premier lancement : [id stable, sens, nom, icône, couleur].
+// Les ids sont fixes pour que deux téléphones qui les créent en même temps ne fassent pas de doublons.
+const DEFAULT_CATS = [
+  ["c-alim", "depense", "Alimentation", "🍽️", "#F5A800"],
+  ["c-auto", "depense", "Auto & Transports", "🚗", "#12B5B0"],
+  ["c-logement", "depense", "Logement & Énergie", "🏠", "#4A90D9"],
+  ["c-prets", "depense", "Prêts & Crédits", "🏦", "#A67C52"],
+  ["c-assur", "depense", "Assurances", "🛡️", "#6C63FF"],
+  ["c-telecom", "depense", "Télécom & Abonnements", "📱", "#9B59B6"],
+  ["c-enfants", "depense", "Enfants & Éducation", "🧒", "#FF7A59"],
+  ["c-sante", "depense", "Santé", "🩺", "#E5446D"],
+  ["c-loisirs", "depense", "Loisirs & Sorties", "🎭", "#D14D9F"],
+  ["c-shopping", "depense", "Shopping & Vêtements", "🛍️", "#F0386B"],
+  ["c-impots", "depense", "Impôts & Taxes", "🏛️", "#7A8B99"],
+  ["c-divers", "depense", "Divers", "✨", "#94B8CC"],
+  ["r-salaire", "revenu", "Salaire", "💼", "#2ECC71"],
+  ["r-primes", "revenu", "Primes & bonus", "🎁", "#F5A800"],
+  ["r-aides", "revenu", "Aides & allocations", "🤝", "#12B5B0"],
+  ["r-rembours", "revenu", "Remboursements", "↩️", "#4A90D9"],
+  ["r-autres", "revenu", "Autres revenus", "💶", "#94B8CC"]
+];
+// Anciens champs texte (avant les catégories) → catégorie équivalente.
+const LEG_CHARGE = { "Prêts": "c-prets", "Assurances": "c-assur", "Énergie": "c-logement", "Télécom": "c-telecom", "Enfants": "c-enfants", "Abonnements": "c-telecom", "Impôts": "c-impots", "Transport": "c-auto", "Autre": "c-divers" };
+const LEG_REVENU = { "Salaire": "r-salaire", "Prime": "r-primes", "Remboursement": "r-rembours", "Aide": "r-aides", "Autre": "r-autres" };
+// Devine la catégorie d'une enveloppe d'après son nom (tant qu'on ne l'a pas choisie).
+const GUESS = [
+  [/divers|imprévu|imprevu/i, "c-divers"],
+  [/cours|aliment|supermarch|repas|restau|boulang|march[ée]/i, "c-alim"],
+  [/carbur|essence|auto|voiture|transport|p[ée]age|parking|train|bus|moto/i, "c-auto"],
+  [/sant[ée]|m[ée]dec|pharma|dentiste|optique|docteur/i, "c-sante"],
+  [/v[êe]tement|shopping|habit|chaussure|mode/i, "c-shopping"],
+  [/loisir|sortie|cin[ée]ma|sport|jeu|cadeau|vacance|voyage/i, "c-loisirs"],
+  [/enfant|[ée]cole|cantine|cr[èe]che|scolaire/i, "c-enfants"],
+  [/[ée]nergie|[ée]lectric|\bgaz\b|\beau\b|loyer|maison|travaux|bricol|jardin/i, "c-logement"],
+  [/assurance|mutuelle/i, "c-assur"],
+  [/t[ée]l[ée]com|internet|mobile|abonnement/i, "c-telecom"],
+  [/imp[ôo]t|taxe/i, "c-impots"]
+];
+const guessCat = label => (GUESS.find(([re]) => re.test(String(label || ""))) || [])[1] || "";
+const CAT_COLORS = ["#F5A800", "#12B5B0", "#4A90D9", "#6C63FF", "#9B59B6", "#D14D9F", "#E5446D", "#FF7A59", "#A67C52", "#2ECC71", "#7CB518", "#94B8CC"];
+const CAT_ICONS = ["🍽️", "🛒", "🚗", "⛽", "🏠", "💡", "🏦", "🛡️", "📱", "📺", "🧒", "🎒", "🩺", "💊", "🎭", "🎬", "✈️", "🛍️", "👕", "🏛️", "🐶", "🎁", "💼", "💶", "🤝", "↩️", "💰", "✨"];
+const UNCAT = { id: "", nom: "À catégoriser", icone: "🏷️", couleur: "#94A7B5", sens: "" };
+const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const CFG = window.BUDGET_CONFIG || {};
 const CONFIGURED = !!(CFG.supabaseUrl && CFG.supabaseAnonKey && !/VOTRE/.test(CFG.supabaseUrl + CFG.supabaseAnonKey));
 
@@ -35,6 +76,11 @@ const ICON = {
   budget: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
   piggy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 11a7 6 0 0 1 13.5-2H20v4l-2 1v3h-3v-2H9v2H6v-3.5A6 6 0 0 1 5 11z"/><circle cx="15" cy="10.5" r=".8" fill="currentColor"/></svg>',
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 13.5A8.5 8.5 0 1 1 10.5 3.5"/><path d="M14 3.2A8.5 8.5 0 0 1 20.8 10H14z"/></svg>',
+  grid: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="11" rx="2"/><rect x="13" y="3" width="8" height="6" rx="2"/><rect x="3" y="16" width="8" height="5" rx="2"/><rect x="13" y="11" width="8" height="10" rx="2"/></svg>',
+  chevd: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
+  prev: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>',
+  next: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
   chev: '<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>'
 };
 
@@ -52,6 +98,8 @@ const app = {
   items: new Map(), outbox: new Map(), cursor: null,
   tab: LS.get("bf:tab", "home"), seg: LS.get("bf:seg", "revenu"),
   month: new Date().getMonth() + 1,
+  aYear: false, aseg: LS.get("bf:aseg", "all"), aview: LS.get("bf:aview", "cat"), aopen: null, // onglet Analyse
+  schemaOld: false,           // la base n'accepte pas encore le type « categorie » (SQL pas mis à jour)
   sync: "ok", channel: null, flushing: false, seq: 0,
   email: LS.get("bf:email", ""), signup: false, authErr: "", busy: false
 };
@@ -88,11 +136,13 @@ const del = (kind, id) => { const it = app.items.get(id); put(kind, id, it ? it.
 
 let flushT = null;
 function queueFlush() { clearTimeout(flushT); flushT = setTimeout(flush, 400); }
+// Lignes à envoyer : si la base refuse encore le type « categorie », on les garde de côté sans bloquer le reste.
+const sendable = () => [...app.outbox.values()].filter(r => !(app.schemaOld && r.kind === "categorie"));
 async function flush() {
-  if (app.mode !== "cloud" || !sb || !app.hid || app.flushing || !app.outbox.size) { updateSync(); return; }
+  if (app.mode !== "cloud" || !sb || !app.hid || app.flushing || !sendable().length) { updateSync(); return; }
   if (!navigator.onLine) { updateSync(); return; }
   app.flushing = true; updateSync();
-  const batch = [...app.outbox.values()].slice(0, 200);
+  const batch = sendable().slice(0, 200);
   try {
     const { data, error } = await sb.from("items")
       .upsert(batch.map(r => ({ household_id: app.hid, id: r.id, kind: r.kind, data: r.data, deleted: r.deleted })), { onConflict: "household_id,id" })
@@ -106,10 +156,11 @@ async function flush() {
     app.sync = "ok";
   } catch (e) {
     console.warn("flush", e);
-    app.sync = "err";
+    if (e && e.code === "23514" && !app.schemaOld && batch.some(r => r.kind === "categorie")) app.schemaOld = true; // contrainte « kind » pas à jour
+    else app.sync = "err";
   } finally {
     app.flushing = false; saveLocal(); updateSync();
-    if (app.outbox.size && app.sync !== "err") queueFlush();
+    if (sendable().length && app.sync !== "err") queueFlush();
     else if (app.sync === "err") setTimeout(queueFlush, 8000);
   }
 }
@@ -135,6 +186,7 @@ async function pull() {
       more = data && data.length === 1000 && app.cursor !== before;
     }
     if (app.sync === "err") app.sync = "ok";
+    ensureCategories(); // seulement une fois les données du foyer reçues, pour ne rien écraser
   } catch (e) { console.warn("pull", e); app.sync = "err"; }
   updateSync();
 }
@@ -146,7 +198,7 @@ function subscribe() {
       p => applyRemote(p.new, false))
     .subscribe(status => { if (status === "SUBSCRIBED") pull(); });
 }
-async function resync() { await flush(); await pull(); if (app.channel && app.channel.state !== "joined") subscribe(); }
+async function resync() { app.schemaOld = false; await flush(); await pull(); if (app.channel && app.channel.state !== "joined") subscribe(); }
 window.addEventListener("online", resync);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resync(); });
 
@@ -159,6 +211,7 @@ function syncLabel() {
   if (app.mode === "demo") return ["off", "Démo locale"];
   const n = app.outbox.size;
   if (!navigator.onLine) return ["off", n ? `Hors ligne · ${n} en attente` : "Hors ligne"];
+  if (app.schemaOld && [...app.outbox.values()].some(r => r.kind === "categorie")) return ["err", "Mettez à jour le SQL (README)"];
   if (app.sync === "err") return ["err", n ? `Non envoyé · ${n}` : "Erreur de synchro"];
   if (n || app.flushing) return ["wait", "Envoi…"];
   return ["ok", "Synchronisé"];
@@ -172,10 +225,54 @@ function state() {
   const s = Object.assign({ annee: new Date().getFullYear(), personnes: ["Personne 1", "Personne 2"], repartition: "prorata", epargneCommune: 0, exemple: false },
     st && !st.deleted ? st.data : {});
   if (!Array.isArray(s.personnes) || s.personnes.length < 2) s.personnes = ["Personne 1", "Personne 2"];
+  const categories = by("categorie");
   return { ...s, livrets: by("livret"), revenus: by("revenu"), charges: by("charge"), provisions: by("provision"), enveloppes: by("enveloppe"),
+    categories, catById: Object.fromEntries(categories.map(c => [c.id, c])),
     depenses: by("depense").sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))) };
 }
 const setSettings = patch => { const S = state(); const cur = { annee: S.annee, personnes: S.personnes, repartition: S.repartition, epargneCommune: S.epargneCommune, exemple: S.exemple }; put("settings", "settings", { ...cur, ...patch }); };
+
+/* ---------- Catégories ---------- */
+// Crée les catégories de départ si le foyer n'en a jamais eu (supprimées comprises).
+function ensureCategories() {
+  if (!app.hid || [...app.items.values()].some(i => i.kind === "categorie")) return;
+  DEFAULT_CATS.forEach(([id, sens, nom, icone, couleur], i) => put("categorie", id, { nom, sens, icone, couleur, ordre: i + 1 }));
+}
+// id de catégorie valide pour ce sens, sinon "" (= à catégoriser). `legacy` convertit les anciens libellés.
+function resolveCat(S, v, sens, legacy) {
+  const c = S.catById[v];
+  if (c && c.sens === sens) return c.id;
+  const id = legacy && legacy[v], c2 = id && S.catById[id];
+  return c2 && c2.sens === sens ? id : "";
+}
+const catMeta = (S, id) => S.catById[id] || UNCAT;
+const chargeCat = (S, c) => resolveCat(S, c.categorie, "depense", LEG_CHARGE);
+const revenuCat = (S, r) => resolveCat(S, "categorie" in r ? r.categorie : LEG_REVENU[r.type], "revenu");
+const envCat = (S, e) => e ? (resolveCat(S, e.categorie, "depense") || resolveCat(S, guessCat(e.libelle), "depense")) : "";
+// Une saisie garde sa catégorie ; les anciennes (sans choix) prennent celle de leur enveloppe.
+const depCat = (S, d) => "categorie" in d ? resolveCat(S, d.categorie, "depense") : envCat(S, S.enveloppes.find(e => e.id === d.enveloppe));
+
+/* Entrées et sorties d'une période (un mois, ou toute l'année si ms = 12 mois). */
+function flows(S, ms) {
+  const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle]));
+  const out = [], inn = [];
+  S.depenses.forEach(d => {
+    if (Number(d.annee) !== Number(S.annee) || !ms.includes(Number(d.mois)) || !num(d.montant)) return;
+    out.push({ k: "depense", id: d.id, montant: num(d.montant), cat: depCat(S, d), fixe: false, titre: d.note || envName[d.enveloppe] || "Dépense", sub: `${envName[d.enveloppe] || "Enveloppe supprimée"} · ${shortDate(d.date)}` });
+  });
+  S.charges.forEach(c => {
+    if (!num(c.montant)) return;
+    out.push({ k: "charge", id: c.id, montant: num(c.montant) * ms.length, cat: chargeCat(S, c), fixe: true, titre: c.libelle || "Charge", sub: ms.length > 1 ? "Charge mensuelle · 12 mois" : "Charge mensuelle" });
+  });
+  S.revenus.forEach(r => {
+    const mensuel = r.frequence === "Mensuel";
+    const v = mensuel ? num(r.montant) * ms.length : (ms.includes(Number(r.mois)) ? num(r.montant) : 0);
+    if (v) inn.push({ k: "revenu", id: r.id, montant: v, cat: revenuCat(S, r), fixe: mensuel, titre: r.libelle || "Revenu", sub: `${r.personne || ""} · ${mensuel ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]}` });
+  });
+  return { out, inn };
+}
+const sumOf = list => list.reduce((a, x) => a + x.montant, 0);
+function shortDate(d) { try { return new Date(d).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }); } catch { return ""; } }
 
 function reel(S, envId, m) { return S.depenses.filter(d => d.enveloppe === envId && Number(d.annee) === Number(S.annee) && Number(d.mois) === m).reduce((a, d) => a + num(d.montant), 0); }
 function revMonth(r, m) { return r.frequence === "Mensuel" ? num(r.montant) : (Number(r.mois) === m ? num(r.montant) : 0); }
@@ -222,7 +319,7 @@ function render() {
   if (scr === "login") return root.innerHTML = vLogin();
   if (scr === "household") return root.innerHTML = vHousehold();
   const S = state();
-  const view = { home: vHome, env: vEnv, budget: vBudget, livrets: vLivrets, settings: vSettings }[app.tab] || vHome;
+  const view = { home: vHome, env: vEnv, analyse: vAnalyse, budget: vBudget, livrets: vLivrets, settings: vSettings }[app.tab] || vHome;
   const y = window.scrollY, fid = !sheet && document.activeElement && root.contains(document.activeElement) ? document.activeElement.id : null;
   root.innerHTML = `<div class="screen"><div class="col">${view(S)}</div></div>${tabbar()}`;
   window.scrollTo(0, y);
@@ -240,7 +337,7 @@ function monthsBar(S) {
 }
 function tabbar() {
   const t = (k, label, icon) => `<button data-tab="${k}" ${app.tab === k ? 'aria-current="page"' : ""}>${icon}<span>${label}</span></button>`;
-  return `<nav class="tabbar" aria-label="Navigation">${t("home", "Accueil", ICON.home)}${t("env", "Dépenses", ICON.env)}<button class="fab" data-act="quick" aria-label="Ajouter une dépense">${ICON.plus}</button>${t("budget", "Budget", ICON.budget)}${t("livrets", "Livrets", ICON.piggy)}</nav>`;
+  return `<nav class="tabbar" aria-label="Navigation">${t("home", "Accueil", ICON.home)}${t("env", "Dépenses", ICON.env)}<button class="fab" data-act="quick" aria-label="Ajouter une dépense">${ICON.plus}</button>${t("analyse", "Analyse", ICON.chart)}${t("budget", "Budget", ICON.budget)}${t("livrets", "Livrets", ICON.piggy)}</nav>`;
 }
 function exampleBanner(S) {
   return S.exemple ? `<div class="banner"><span>Ce budget contient des <b>montants d'exemple</b>. Remplacez-les par les vôtres, ou repartez de zéro.</span><div class="btnrow"><button class="btn line" data-act="keepExample">Garder et modifier</button><button class="btn danger" data-act="askClear">Tout vider</button></div></div>` : "";
@@ -281,27 +378,42 @@ function vEnv(S) {
   const m = app.month, c = calc(S, m);
   const deps = S.depenses.filter(d => Number(d.annee) === Number(S.annee) && Number(d.mois) === m);
   const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle]));
-  const dfmt = d => { try { return new Date(d).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }); } catch { return ""; } };
+  const dfmt = shortDate;
   return `${head("Dépenses")}
   ${monthsBar(S)}
   <div class="duo"><section class="card"><div class="label">Dépensé</div><div class="mid">${eur(c.envReel)}</div><div class="sub">sur ${eur(c.envPrevu)} prévus</div></section>
   <section class="card"><div class="label">Reste</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${MOIS[m - 1].toLowerCase()} ${S.annee}</div></section></div>
   <section class="card"><h2>Par enveloppe<small>touchez pour ajouter</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
   <section class="card"><h2>Saisies du mois<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}</small></h2><div class="list">
-    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}"><div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || "Enveloppe supprimée")} · ${dfmt(d.date)}${d.par ? " · " + esc(d.par) : ""}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : `<p class="empty">Aucune dépense saisie pour ${MOIS[m - 1].toLowerCase()}. Utilisez le bouton +.</p>`}
+    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || "Enveloppe supprimée")} · ${dfmt(d.date)}${d.par ? " · " + esc(d.par) : ""}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : `<p class="empty">Aucune dépense saisie pour ${MOIS[m - 1].toLowerCase()}. Utilisez le bouton +.</p>`}
   </div></section>`;
 }
 
-const SEGS = [["revenu", "Revenus"], ["charge", "Charges"], ["provision", "Provisions"], ["enveloppe", "Enveloppes"]];
+const SEGS = [["revenu", "Revenus"], ["charge", "Charges"], ["provision", "Provisions"], ["enveloppe", "Enveloppes"], ["categorie", "Catégories"]];
+const segBar = seg => `<div class="seg" role="group">${SEGS.map(([k, l]) => `<button data-seg="${k}" aria-pressed="${seg === k}">${l}</button>`).join("")}</div>`;
+function vCategories(S) {
+  const block = (sens, title, add) => {
+    const L = S.categories.filter(c => c.sens === sens);
+    return `<section class="card"><h2>${title}<small>${L.length}</small></h2><div class="list">
+      ${L.map(c => `<button class="row" data-edit="categorie" data-id="${c.id}">${ico(c)}<div class="main"><div class="t">${esc(c.nom)}</div></div>${ICON.chev}</button>`).join("") || `<p class="empty">Aucune catégorie.</p>`}
+      <button class="addrow" data-new="categorie" data-sens="${sens}">${ICON.plus.replace("<svg", '<svg width="18" height="18"')} ${add}</button></div></section>`;
+  };
+  return `${head("Budget")}
+  ${segBar("categorie")}
+  <p class="note" style="margin:0">Rangez vos dépenses et vos revenus pour les retrouver dans l'onglet Analyse. Supprimer une catégorie remet ses saisies dans « À catégoriser ».</p>
+  ${block("depense", "Catégories de dépenses", "Ajouter une catégorie de dépense")}
+  ${block("revenu", "Catégories de revenus", "Ajouter une catégorie de revenu")}`;
+}
 function vBudget(S) {
   const seg = app.seg;
+  if (seg === "categorie") return vCategories(S);
   const L = { revenu: S.revenus, charge: S.charges, provision: S.provisions, enveloppe: S.enveloppes }[seg] || [];
   const liv = Object.fromEntries(S.livrets.map(l => [l.id, l.nom]));
   const rowOf = {
-    revenu: r => [r.libelle, `${r.personne || ""} · ${r.frequence === "Mensuel" ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]}`, eur(r.montant), r.frequence === "Mensuel" ? "/ mois" : "ponctuel"],
-    charge: c => [c.libelle, `${c.categorie || ""} · ${c.compte || ""}`, eur(c.montant), "/ mois"],
+    revenu: r => [r.libelle, `${r.personne || ""} · ${r.frequence === "Mensuel" ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]} · ${catMeta(S, revenuCat(S, r)).nom}`, eur(r.montant), r.frequence === "Mensuel" ? "/ mois" : "ponctuel"],
+    charge: c => [c.libelle, `${catMeta(S, chargeCat(S, c)).nom} · ${c.compte || ""}`, eur(c.montant), "/ mois"],
     provision: p => [p.libelle, `${MOIS[(Number(p.mois) || 1) - 1]} · ${liv[p.livret] || "sans livret"}`, eur(num(p.montant) / 12), `/ mois · ${eur(p.montant)} an`],
-    enveloppe: e => [e.libelle, "budget mensuel", eur(e.prevu), "/ mois"]
+    enveloppe: e => [e.libelle, `budget mensuel · ${catMeta(S, envCat(S, e)).nom}`, eur(e.prevu), "/ mois"]
   }[seg];
   const total = {
     revenu: ["Revenus réguliers / mois", eur(S.revenus.filter(r => r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0))],
@@ -317,12 +429,157 @@ function vBudget(S) {
   }[seg];
   const addLabel = { revenu: "Ajouter un revenu", charge: "Ajouter une charge", provision: "Ajouter une dépense annuelle", enveloppe: "Ajouter une enveloppe" }[seg];
   return `${head("Budget")}
-  <div class="seg" role="group">${SEGS.map(([k, l]) => `<button data-seg="${k}" aria-pressed="${seg === k}">${l}</button>`).join("")}</div>
+  ${segBar(seg)}
   <p class="note" style="margin:0">${help}</p>
   <section class="card"><div class="list">
     ${L.length ? L.map(it => { const [t, s, a, as] = rowOf(it); return `<button class="row" data-edit="${seg}" data-id="${it.id}"><div class="main"><div class="t">${esc(t) || "<span class='muted'>Sans nom</span>"}</div><div class="s">${esc(s)}</div></div><div class="amt">${a}<small>${as}</small></div>${ICON.chev}</button>`; }).join("") : `<p class="empty">Rien pour l'instant.</p>`}
     <button class="addrow" data-new="${seg}">${ICON.plus.replace("<svg", '<svg width="18" height="18"')} ${addLabel}</button>
   </div><div class="totals"><span>${total[0]}</span><span>${total[1]}</span></div></section>`;
+}
+
+/* ====================== Analyse ====================== */
+const ico = (c, size = "") => `<span class="ico ${size}" style="background:${esc(c.couleur)}" aria-hidden="true">${esc(c.icone)}</span>`;
+const eurc = v => fmt2.format(num(v));
+const eurBig = v => `${eurc(v).replace(/[\s  ]*€/, "")}<span class="cur">€</span>`;
+const plural = (n, w) => `${n} ${w}${n > 1 ? "s" : ""}`;
+
+function period(S) {
+  const all = app.aYear;
+  return { all, ms: all ? ALL_MONTHS : [app.month], label: all ? `Année ${S.annee}` : `${MOIS[app.month - 1]} ${S.annee}` };
+}
+// Regroupe des lignes par catégorie (ou, en mode « simplifié », fixes / variables).
+function groupItems(S, list, mode, sens) {
+  const simple = sens === "depense"
+    ? { fixe: { nom: "Charges fixes", icone: "📌", couleur: "#6C63FF" }, var: { nom: "Dépenses courantes", icone: "🛒", couleur: "#F5A800" } }
+    : { fixe: { nom: "Revenus réguliers", icone: "🔁", couleur: "#2ECC71" }, var: { nom: "Revenus ponctuels", icone: "✨", couleur: "#F5A800" } };
+  const g = new Map();
+  list.forEach(it => {
+    const key = mode === "simple" ? (it.fixe ? "fixe" : "var") : (it.cat || "_none");
+    let e = g.get(key);
+    if (!e) g.set(key, e = { key, meta: mode === "simple" ? simple[key] : catMeta(S, it.cat), total: 0, items: [] });
+    e.total += it.montant; e.items.push(it);
+  });
+  return [...g.values()].sort((a, b) => (b.key === "_none") - (a.key === "_none") || b.total - a.total);
+}
+// Anneau façon « donut » : un arc par groupe, l'icône au milieu des arcs assez larges.
+function donut(groups, total, label) {
+  const C = 110, R = 86, W = 30;
+  const pt = (a, r = R) => [C + r * Math.cos(a * Math.PI / 180), C + r * Math.sin(a * Math.PI / 180)];
+  let svg = `<circle cx="${C}" cy="${C}" r="${R}" fill="none" stroke="var(--surface-2)" stroke-width="${W}"/>`;
+  if (total > 0) {
+    let start = -90;
+    const gap = groups.length > 1 ? 2.4 : 0;
+    groups.forEach(g => {
+      const ang = g.total / total * 360;
+      if (ang >= 359.9) { svg += `<circle cx="${C}" cy="${C}" r="${R}" fill="none" stroke="${esc(g.meta.couleur)}" stroke-width="${W}"/>`; }
+      else {
+        const a0 = start + gap / 2, a1 = Math.max(start + ang - gap / 2, a0 + .4);
+        const [x0, y0] = pt(a0), [x1, y1] = pt(a1);
+        svg += `<path d="M${x0.toFixed(2)} ${y0.toFixed(2)} A${R} ${R} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}" fill="none" stroke="${esc(g.meta.couleur)}" stroke-width="${W}"/>`;
+      }
+      if (ang > 17) { const [tx, ty] = pt(start + ang / 2); svg += `<text x="${tx.toFixed(1)}" y="${ty.toFixed(1)}" text-anchor="middle" dominant-baseline="central" font-size="14">${esc(g.meta.icone)}</text>`; }
+      start += ang;
+    });
+  }
+  return `<div class="donut"><svg viewBox="0 0 220 220" role="img" aria-label="${esc(label)} : ${eurc(total)}">${svg}</svg><div class="donut-c"><div class="big">${eurBig(total)}</div><div class="sub">${esc(label)}</div></div></div>`;
+}
+function gauge(pct) {
+  const p = Math.max(0, Math.min(100, pct));
+  return `<svg class="gauge" viewBox="0 0 120 68" aria-hidden="true"><path d="M10 60A50 50 0 0 1 110 60" pathLength="100" fill="none" stroke="var(--surface-2)" stroke-width="12" stroke-linecap="round"/><path d="M10 60A50 50 0 0 1 110 60" pathLength="100" fill="none" stroke="var(--c-epargne)" stroke-width="12" stroke-linecap="round" stroke-dasharray="${p} 100"/></svg>`;
+}
+function itemRow(it, S, mode) {
+  const extra = mode === "simple" && it.cat !== undefined ? ` · ${esc(catMeta(S, it.cat).nom)}` : "";
+  return `<button class="row sm" data-edit="${it.k}" data-id="${it.id}"><div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc(it.sub)}${extra}</div></div><div class="amt">${eurc(it.montant)}</div></button>`;
+}
+
+function vAnalyse(S) {
+  const per = period(S), { out, inn } = flows(S, per.ms);
+  const totOut = sumOf(out), totIn = sumOf(inn);
+  const seg = ["all", "entrees", "sorties", "rec"].includes(app.aseg) ? app.aseg : "all";
+  const atMin = !per.all && app.month <= 1, atMax = !per.all && app.month >= 12;
+  const opts = [`<option value="0" ${per.all ? "selected" : ""}>Toute l'année ${S.annee}</option>`, ...MOIS.map((n, i) => `<option value="${i + 1}" ${!per.all && app.month === i + 1 ? "selected" : ""}>${n} ${S.annee}</option>`)].join("");
+  const segBtn = (k, label) => `<button data-aseg="${k}" aria-pressed="${seg === k}">${label}</button>`;
+  const nav = `<section class="card period">
+    <div class="pnav"><button class="iconbtn sm" data-step="-1" aria-label="Période précédente" ${per.all || atMin ? "disabled" : ""}>${ICON.prev}</button>
+      <label class="plabel"><span>${esc(per.label)}</span>${ICON.chevd}<select data-aper aria-label="Choisir la période">${opts}</select></label>
+      <button class="iconbtn sm" data-step="1" aria-label="Période suivante" ${per.all || atMax ? "disabled" : ""}>${ICON.next}</button></div>
+    <div class="aseg" role="group" aria-label="Type d'analyse"><button class="ov" data-aseg="all" aria-pressed="${seg === "all"}" aria-label="Vue d'ensemble">${ICON.grid}</button>${segBtn("entrees", "Entrées")}${segBtn("sorties", "Sorties")}${segBtn("rec", "Récurrences")}</div></section>`;
+  const todo = out.filter(x => !x.cat).length + inn.filter(x => !x.cat).length;
+  const nudge = todo ? `<button class="card nudge" data-aseg="${out.some(x => !x.cat) ? "sorties" : "entrees"}"><span class="ico sm" style="background:${UNCAT.couleur}">${UNCAT.icone}</span><span class="main"><b>${plural(todo, "ligne")} à catégoriser</b><small>Touchez pour les ranger</small></span>${ICON.chev}</button>` : "";
+  let body;
+  if (seg === "all") body = vOverview(S, per, out, totIn, totOut) + nudge;
+  else if (seg === "rec") body = vRec(S, per);
+  else body = vFlow(S, per, seg === "sorties" ? "depense" : "revenu", seg === "sorties" ? out : inn, seg === "sorties" ? totOut : totIn);
+  return `${head("Analyse")}${nav}${body}`;
+}
+
+function vOverview(S, per, out, totIn, totOut) {
+  const n = per.ms.length, bal = totIn - totOut;
+  const chFix = S.charges.reduce((a, c) => a + num(c.montant), 0), envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
+  const budget = (chFix + envPrevu) * n, left = budget - totOut;
+  const prov = S.provisions.reduce((a, p) => a + num(p.montant) / 12, 0) * n;
+  const objectif = totIn - budget - prov, reelEp = totIn - totOut - prov;
+  const mx = Math.max(totIn, totOut, 1), h = v => Math.max(Math.round(v / mx * 150), 26);
+  return `<section class="card"><div class="label">Balance</div>
+    <div class="big ${bal < 0 ? "neg" : ""}">${eurBig(bal)}</div>
+    <div class="flowbox">
+      <button data-aseg="entrees"><span class="label">Entrées ${ICON.chev}</span><b>${eurc(totIn)}</b><i class="blk" style="height:${h(totIn)}px;background:var(--accent)"></i></button>
+      <button data-aseg="sorties"><span class="label">Sorties ${ICON.chev}</span><b>${eurc(totOut)}</b><i class="blk" style="height:${h(totOut)}px;background:var(--line)"></i></button>
+    </div></section>
+  <div class="duo">
+    <button class="card tile" data-tab="budget"><div class="label">Budget</div>
+      <div class="mid ${left < 0 ? "neg" : "acc"}">${eurc(Math.abs(left))}</div><div class="sub">${left < 0 ? "Dépassement du budget" : "Restants sur le budget"}</div><div class="more">Voir mon budget ${ICON.chev}</div></button>
+    <button class="card tile" data-tab="livrets"><div class="label">Épargne</div>
+      ${objectif > 0 ? gauge(reelEp / objectif * 100) : ""}<div class="mid ${reelEp < 0 ? "neg" : ""}">${eurc(reelEp)}</div><div class="sub">${objectif > 0 ? `sur ${eurc(objectif)} prévus` : "après provisions"}</div><div class="more">Voir plus ${ICON.chev}</div></button>
+  </div>`;
+}
+
+function vFlow(S, per, sens, list, total) {
+  const mode = app.aview === "simple" ? "simple" : "cat";
+  const groups = groupItems(S, list, mode, sens);
+  const label = sens === "depense" ? "Dépenses" : "Revenus";
+  const noun = sens === "depense" ? "transaction" : "entrée";
+  const n = per.ms.length;
+  let budgetCard = "";
+  if (sens === "depense") {
+    const budget = (S.charges.reduce((a, c) => a + num(c.montant), 0) + S.enveloppes.reduce((a, e) => a + num(e.prevu), 0)) * n;
+    const pct = budget ? Math.round(total / budget * 100) : 0;
+    budgetCard = `<button class="card budget" data-tab="budget"><div class="brow"><span class="blab"><span class="ico xs">${ICON.budget.replace("<svg", '<svg width="14" height="14"')}</span>Budget <i class="dot ${total > budget ? "bad" : ""}"></i></span><span class="bamt"><b>${eurc(total)}</b> / ${eur(budget)}</span>${ICON.chev}</div>
+      <div class="brow"><div class="bar ${total > budget ? "over" : ""} grow"><i style="width:${Math.min(pct, 100)}%"></i></div><span class="pct">${pct} %</span></div></button>`;
+  }
+  const rows = groups.map(g => {
+    const key = `${sens}:${g.key}`, open = app.aopen === key;
+    const pct = total ? Math.round(g.total / total * 100) : 0;
+    const items = [...g.items].sort((a, b) => b.montant - a.montant);
+    const edit = mode === "cat" && g.key !== "_none"
+      ? `<button class="btn line block sm" data-edit="categorie" data-id="${esc(g.key)}">Modifier la catégorie</button>`
+      : (g.key === "_none" ? `<p class="note" style="margin:0">Touchez une ligne, puis choisissez sa catégorie.</p>` : "");
+    return `<div class="grp"><button class="row catrow" data-opencat="${esc(key)}" aria-expanded="${open}">${ico(g.meta)}<div class="main"><div class="t">${esc(g.meta.nom)}</div><div class="s">${pct} % • ${plural(g.items.length, noun)}</div></div><div class="amt">${eurc(g.total)}</div><span class="chev-wrap ${open ? "open" : ""}">${ICON.chev}</span></button>
+      ${open ? `<div class="sublist">${items.map(it => itemRow(it, S, mode)).join("")}${edit}</div>` : ""}</div>`;
+  }).join("");
+  return `<section class="card chart">
+    ${donut(groups, total, label)}
+    <div class="aseg two" role="group" aria-label="Affichage"><button data-aview="cat" aria-pressed="${mode === "cat"}">Catégories</button><button data-aview="simple" aria-pressed="${mode === "simple"}">Simplifié</button></div>
+  </section>
+  ${budgetCard}
+  <section class="card"><div class="btnrow"><button class="btn line" data-new="categorie" data-sens="${sens}">Créer une catégorie ${ICON.plus.replace("<svg", '<svg width="16" height="16"')}</button><button class="btn line" data-act="manageCats" style="flex:0 0 auto">Gérer</button></div>
+    <div class="list" style="margin-top:6px">${rows || `<p class="empty">Aucune ${sens === "depense" ? "dépense" : "entrée"} sur cette période.</p>`}</div></section>`;
+}
+
+function vRec(S, per) {
+  const n = per.ms.length, sfx = per.all ? "sur l'année" : "par mois";
+  const rev = S.revenus.filter(r => r.frequence === "Mensuel").map(r => ({ k: "revenu", id: r.id, titre: r.libelle, montant: num(r.montant) * n, meta: catMeta(S, revenuCat(S, r)), sub: r.personne || "" }));
+  const ch = S.charges.map(c => ({ k: "charge", id: c.id, titre: c.libelle, montant: num(c.montant) * n, meta: catMeta(S, chargeCat(S, c)), sub: c.compte || "" }));
+  const pr = S.provisions.map(p => ({ k: "provision", id: p.id, titre: p.libelle, montant: num(p.montant) / 12 * n, meta: { icone: "🐷", couleur: "#C28316" }, sub: `${MOIS[(Number(p.mois) || 1) - 1]} · ${eur(p.montant)} / an` }));
+  const T = L => sumOf(L);
+  const block = (title, L) => `<section class="card"><h2>${title}<small>${eurc(T(L))}</small></h2><div class="list">${[...L].sort((a, b) => b.montant - a.montant).map(it => `<button class="row" data-edit="${it.k}" data-id="${it.id}">${ico(it.meta, "sm")}<div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc([it.sub, it.meta.nom].filter(Boolean).join(" · "))}</div></div><div class="amt">${eurc(it.montant)}</div></button>`).join("") || `<p class="empty">Rien pour l'instant.</p>`}</div></section>`;
+  const reste = T(rev) - T(ch) - T(pr);
+  return `<section class="card"><h2>Récurrences<small>${sfx}</small></h2>
+    <div class="kv"><span>Revenus réguliers</span><b>${eurc(T(rev))}</b></div>
+    <div class="kv"><span>− Charges fixes</span><b>${eurc(T(ch))}</b></div>
+    <div class="kv"><span>− De côté (livrets)</span><b>${eurc(T(pr))}</b></div>
+    <div class="kv total"><span>Reste</span><b class="${reste < 0 ? "neg" : ""}">${eurc(reste)}</b></div></section>
+  ${block("Revenus réguliers", rev)}${block("Charges fixes", ch)}${block("Mises de côté", pr)}`;
 }
 
 function spark(vals, m) {
@@ -431,28 +688,36 @@ function vHousehold() {
 
 /* ====================== Feuilles (formulaires) ====================== */
 let sheet = null; // {kind, id|null, draft}
+const catOpts = (S, sens, none) => [["", none], ...S.categories.filter(c => c.sens === sens).map(c => [c.id, `${c.icone} ${c.nom}`])];
 function fieldsFor(kind, S, d) {
   const months = MOIS.map((n, i) => [i + 1, n]);
   return {
-    revenu: [["libelle", "Libellé", "text"], ["montant", "Montant", "euro"], ["personne", "Personne", "select", [...S.personnes, "Commun"]], ["type", "Type", "select", TYPES], ["frequence", "Fréquence", "select", ["Mensuel", "Ponctuel"]], ...(d.frequence === "Ponctuel" ? [["mois", "Mois", "select", months]] : [])],
-    charge: [["libelle", "Libellé", "text"], ["montant", "Montant / mois", "euro"], ["categorie", "Catégorie", "select", CATS], ["compte", "Compte", "select", ["Joint", ...S.personnes.map(p => "Perso " + p)]]],
+    revenu: [["libelle", "Libellé", "text"], ["montant", "Montant", "euro"], ["personne", "Personne", "select", [...S.personnes, "Commun"]], ["categorie", "Catégorie", "select", catOpts(S, "revenu", "À catégoriser")], ["frequence", "Fréquence", "select", ["Mensuel", "Ponctuel"]], ...(d.frequence === "Ponctuel" ? [["mois", "Mois", "select", months]] : [])],
+    charge: [["libelle", "Libellé", "text"], ["montant", "Montant / mois", "euro"], ["categorie", "Catégorie", "select", catOpts(S, "depense", "À catégoriser")], ["compte", "Compte", "select", ["Joint", ...S.personnes.map(p => "Perso " + p)]]],
     provision: [["libelle", "Libellé", "text"], ["montant", "Montant annuel", "euro"], ["mois", "Mois de la dépense", "select", months], ["livret", "Livret", "select", [["", "—"], ...S.livrets.map(l => [l.id, l.nom])]]],
-    enveloppe: [["libelle", "Nom de l'enveloppe", "text"], ["prevu", "Budget / mois", "euro"]],
+    enveloppe: [["libelle", "Nom de l'enveloppe", "text"], ["prevu", "Budget / mois", "euro"], ["categorie", "Catégorie des saisies", "select", catOpts(S, "depense", "Automatique (d'après le nom)")]],
     livret: [["nom", "Nom du livret", "text"], ["solde", `Solde au 1er janvier ${S.annee}`, "euro"]]
   }[kind];
 }
-const TITLES = { revenu: "Revenu", charge: "Charge mensuelle", provision: "Dépense annuelle", enveloppe: "Enveloppe", livret: "Livret", depense: "Dépense" };
+const TITLES = { revenu: "Revenu", charge: "Charge mensuelle", provision: "Dépense annuelle", enveloppe: "Enveloppe", livret: "Livret", depense: "Dépense", categorie: "Catégorie" };
 function openSheet(kind, id, preset = {}) {
   const S = state();
   const it = id ? app.items.get(id) : null;
   const defaults = {
-    revenu: { personne: S.personnes[0], type: "Salaire", frequence: "Mensuel", mois: app.month },
-    charge: { categorie: "Autre", compte: "Joint" },
+    revenu: { personne: S.personnes[0], categorie: "r-salaire", frequence: "Mensuel", mois: app.month },
+    charge: { categorie: "c-divers", compte: "Joint" },
     provision: { mois: app.month, livret: S.livrets[0]?.id || "" },
     enveloppe: {}, livret: { solde: 0 },
-    depense: { enveloppe: S.enveloppes[0]?.id || "", mois: app.month, annee: S.annee }
+    depense: { enveloppe: S.enveloppes[0]?.id || "", mois: app.month, annee: S.annee },
+    categorie: { nom: "", sens: "depense", icone: "🏷️", couleur: CAT_COLORS[S.categories.length % CAT_COLORS.length] }
   }[kind];
-  sheet = { kind, id, draft: { ...defaults, ...(it ? it.data : {}), ...preset }, confirmDel: false };
+  const draft = { ...defaults, ...(it ? it.data : {}), ...preset };
+  // les anciennes lignes (libellés texte) sont converties pour que la liste déroulante affiche la bonne catégorie
+  if (kind === "revenu") draft.categorie = revenuCat(S, it ? it.data : draft);
+  if (kind === "charge") draft.categorie = chargeCat(S, draft);
+  if (kind === "enveloppe") draft.categorie = resolveCat(S, draft.categorie, "depense");
+  if (kind === "depense") draft.categorie = it ? depCat(S, it.data) : (preset.categorie ?? envCat(S, S.enveloppes.find(e => e.id === draft.enveloppe)));
+  sheet = { kind, id, draft, confirmDel: false };
   renderSheet(true);
 }
 function closeSheet() { sheet = null; $("#sheet").innerHTML = ""; document.body.style.overflow = ""; }
@@ -460,9 +725,18 @@ function renderSheet(first) {
   if (!sheet) return;
   const S = state(), d = sheet.draft, k = sheet.kind;
   let body;
-  if (k === "depense") {
+  if (k === "categorie") {
+    body = `<div class="catprev">${ico(d)}<span>${esc(d.nom || "Nouvelle catégorie")}</span></div>
+      <label class="field"><span>Nom</span><input id="f-nom" data-f="nom" value="${esc(d.nom || "")}" autocapitalize="sentences" maxlength="30"></label>
+      ${sheet.id ? "" : `<label class="field"><span>Type</span><select id="f-sens" data-f="sens"><option value="depense" ${d.sens !== "revenu" ? "selected" : ""}>Dépense</option><option value="revenu" ${d.sens === "revenu" ? "selected" : ""}>Revenu</option></select></label>`}
+      <div class="field"><span>Icône</span><div class="picks">${CAT_ICONS.map(i => `<button type="button" data-pick="icone:${esc(i)}" aria-pressed="${d.icone === i}">${esc(i)}</button>`).join("")}</div>
+        <input id="f-icone" data-f="icone" value="${esc(d.icone || "")}" maxlength="4" placeholder="ou tapez un emoji" aria-label="Icône personnalisée" style="margin-top:8px"></div>
+      <div class="field"><span>Couleur</span><div class="picks colors">${CAT_COLORS.map(c => `<button type="button" data-pick="couleur:${c}" aria-pressed="${d.couleur === c}" aria-label="Couleur ${c}" style="background:${c}"></button>`).join("")}</div></div>
+      ${sheet.id ? `<p class="note">Supprimer une catégorie remet ses saisies dans « À catégoriser ».</p>` : ""}`;
+  } else if (k === "depense") {
     body = `<div class="amountwrap"><input class="amount" id="f-montant" data-f="montant" inputmode="decimal" placeholder="0" value="${d.montant != null && d.montant !== "" ? esc(String(d.montant).replace(".", ",")) : ""}" aria-label="Montant"><span>€</span></div>
       <div class="field"><span>Enveloppe</span><div class="chips">${S.enveloppes.map(e => `<button type="button" data-chip="${e.id}" aria-pressed="${d.enveloppe === e.id}">${esc(e.libelle)}</button>`).join("") || '<span class="muted">Créez d\'abord une enveloppe dans Budget.</span>'}</div></div>
+      <div class="field"><span>Catégorie</span><div class="chips cats">${S.categories.filter(c => c.sens === "depense").map(c => `<button type="button" data-catchip="${esc(c.id)}" aria-pressed="${d.categorie === c.id}" style="--cc:${esc(c.couleur)}">${esc(c.icone)} ${esc(c.nom)}</button>`).join("") || '<span class="muted">Créez des catégories dans Budget.</span>'}</div></div>
       <label class="field"><span>Note (facultatif)</span><input id="f-note" data-f="note" value="${esc(d.note || "")}" placeholder="Ex. Marché, plein d'essence…"></label>
       <label class="field"><span>Mois</span><select id="f-mois" data-f="mois">${MOIS.map((n, i) => `<option value="${i + 1}" ${Number(d.mois) === i + 1 ? "selected" : ""}>${n} ${d.annee || S.annee}</option>`).join("")}</select></label>`;
   } else {
@@ -477,18 +751,20 @@ function renderSheet(first) {
   const delZone = sheet.id ? (sheet.confirmDel
     ? `<div class="btnrow"><button type="button" class="btn danger" data-act="delConfirm">Supprimer définitivement</button><button type="button" class="btn line" data-act="delCancel">Annuler</button></div>`
     : `<button type="button" class="btn danger block" data-act="delAsk">Supprimer</button>`) : "";
-  const focusId = document.activeElement?.id;
+  const focusId = document.activeElement?.id, keepY = $("#sheet .panel")?.scrollTop || 0;
   $("#sheet").innerHTML = `<div class="scrim" data-act="closeSheet"></div><div class="panel" role="dialog" aria-modal="true" aria-label="${TITLES[k]}"><div class="grab"></div>
     <form class="form" id="sheetForm"><div class="ph"><button type="button" data-act="closeSheet">Annuler</button><h2>${sheet.id ? TITLES[k] : (k === "depense" ? "Nouvelle dépense" : "Nouveau · " + TITLES[k].toLowerCase())}</h2><button type="submit">${sheet.id ? "OK" : "Ajouter"}</button></div>
     ${body}<p class="err" id="sheetErr" hidden></p>
     <button class="btn block">${sheet.id ? "Enregistrer" : "Ajouter"}</button>${delZone}</form></div>`;
   document.body.style.overflow = "hidden";
-  if (first) { const f = k === "depense" ? $("#f-montant") : $("#sheet input"); if (f && !sheet.id) setTimeout(() => f.focus(), 60); }
+  if (!first) { const pn = $("#sheet .panel"); if (pn) pn.scrollTop = keepY; }
+  if (first) { const f = k === "depense" ? $("#f-montant") : $("#sheet input[data-f]"); if (f && !sheet.id) setTimeout(() => f.focus(), 60); }
   else if (focusId) { const el = document.getElementById(focusId); if (el) el.focus(); }
 }
 function saveSheet() {
   const { kind, id, draft } = sheet;
   const d = { ...draft };
+  delete d._ct;
   ["montant", "prevu", "solde"].forEach(f => { if (f in d) d[f] = d[f] === "" ? 0 : num(d[f]); });
   if ("mois" in d) d.mois = Number(d.mois) || 1;
   const err = m => { const e = $("#sheetErr"); e.textContent = m; e.hidden = false; };
@@ -497,8 +773,9 @@ function saveSheet() {
     if (!d.enveloppe) return err("Choisissez une enveloppe.");
     if (!id) { d.date = new Date().toISOString(); d.par = app.myName || ""; d.annee = state().annee; }
   } else {
-    const nameF = kind === "livret" ? "nom" : "libelle";
+    const nameF = kind === "livret" || kind === "categorie" ? "nom" : "libelle";
     if (!String(d[nameF] || "").trim()) return err("Donnez-lui un nom.");
+    if (kind === "categorie") { d.nom = d.nom.trim(); d.icone = String(d.icone || "").trim() || "🏷️"; }
   }
   if (!id) d.ordre = Date.now();
   put(kind, id || newId(), d);
@@ -514,18 +791,29 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = fal
 function go(screen) { app.screen = screen; app.authErr = ""; render(); }
 
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip]");
+  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step]");
   if (!t) return;
-  if (t.dataset.chip) { sheet.draft.enveloppe = t.dataset.chip; renderSheet(); return; }
+  if (t.dataset.chip) {
+    const d = sheet.draft; d.enveloppe = t.dataset.chip;
+    if (!d._ct) { const S = state(); d.categorie = envCat(S, S.enveloppes.find(x => x.id === d.enveloppe)); } // la catégorie suit l'enveloppe tant qu'on n'a pas choisi
+    renderSheet(); return;
+  }
+  if (t.dataset.catchip) { const d = sheet.draft; d.categorie = d.categorie === t.dataset.catchip ? "" : t.dataset.catchip; d._ct = true; renderSheet(); return; }
+  if (t.dataset.pick) { const i = t.dataset.pick.indexOf(":"); sheet.draft[t.dataset.pick.slice(0, i)] = t.dataset.pick.slice(i + 1); renderSheet(); return; }
+  if (t.dataset.aseg) { app.aseg = t.dataset.aseg; app.aopen = null; LS.set("bf:aseg", app.aseg); window.scrollTo(0, 0); render(); return; }
+  if (t.dataset.aview) { app.aview = t.dataset.aview; app.aopen = null; LS.set("bf:aview", app.aview); render(); return; }
+  if (t.dataset.opencat) { app.aopen = app.aopen === t.dataset.opencat ? null : t.dataset.opencat; render(); return; }
+  if (t.dataset.step) { app.month = Math.min(12, Math.max(1, app.month + Number(t.dataset.step))); app.aopen = null; render(); return; }
   if (t.dataset.tab) { app.tab = t.dataset.tab; LS.set("bf:tab", app.tab); render._scrolled = false; window.scrollTo(0, 0); render(); return; }
   if (t.dataset.month) { app.month = Number(t.dataset.month); render(); return; }
   if (t.dataset.seg) { app.seg = t.dataset.seg; LS.set("bf:seg", app.seg); render(); return; }
   if (t.dataset.edit) { openSheet(t.dataset.edit, t.dataset.id); return; }
-  if (t.dataset.new) { openSheet(t.dataset.new, null); return; }
+  if (t.dataset.new) { openSheet(t.dataset.new, null, t.dataset.sens ? { sens: t.dataset.sens } : {}); return; }
   const a = t.dataset.act;
   switch (a) {
     case "quick": openSheet("depense", null, t.dataset.env ? { enveloppe: t.dataset.env } : {}); break;
     case "closeSheet": closeSheet(); break;
+    case "manageCats": app.tab = "budget"; app.seg = "categorie"; LS.set("bf:tab", app.tab); LS.set("bf:seg", app.seg); window.scrollTo(0, 0); render(); break;
     case "delAsk": sheet.confirmDel = true; renderSheet(); break;
     case "delCancel": sheet.confirmDel = false; renderSheet(); break;
     case "delConfirm": {
@@ -543,7 +831,7 @@ document.addEventListener("click", async e => {
     case "keepExample": setSettings({ exemple: false }); break;
     case "askClear": {
       const zone = t.closest(".btnrow");
-      zone.innerHTML = `<span style="flex-basis:100%;font-size:14px">Effacer revenus, charges, provisions, enveloppes, livrets et dépenses ?</span><button class="btn danger" data-act="clear">Oui, tout vider</button><button class="btn line" data-act="cancelClear">Annuler</button>`;
+      zone.innerHTML = `<span style="flex-basis:100%;font-size:14px">Effacer revenus, charges, provisions, enveloppes, livrets et dépenses ? (Les catégories sont conservées.)</span><button class="btn danger" data-act="clear">Oui, tout vider</button><button class="btn line" data-act="cancelClear">Annuler</button>`;
       break;
     }
     case "cancelClear": render(); break;
@@ -566,6 +854,7 @@ document.addEventListener("input", e => {
 document.addEventListener("change", e => {
   const el = e.target;
   if (el.id === "importFile") return doImport(el.files[0]);
+  if ("aper" in el.dataset) { const v = Number(el.value); app.aYear = v === 0; if (v) app.month = v; app.aopen = null; render(); return; }
   if (el.dataset.setting) {
     const k = el.dataset.setting; let v = el.value;
     if (k === "annee") v = Number(v) || new Date().getFullYear();
@@ -592,7 +881,7 @@ document.addEventListener("submit", async e => {
 document.addEventListener("keydown", e => { if (e.key === "Escape" && sheet) closeSheet(); });
 
 function clearAll() {
-  for (const it of [...app.items.values()]) if (it.kind !== "settings" && !it.deleted) put(it.kind, it.id, it.data, true);
+  for (const it of [...app.items.values()]) if (it.kind !== "settings" && it.kind !== "categorie" && !it.deleted) put(it.kind, it.id, it.data, true); // les catégories sont un réglage : on les garde
 }
 
 /* ---------- Auth & foyer ---------- */
@@ -683,12 +972,14 @@ function startDemo() {
   app.hid = "demo"; app.user = null; app.myName = "Vous";
   loadLocal();
   if (!app.items.size) seed(true, "Florian");
+  ensureCategories();
   app.screen = "app"; render();
 }
 
 /* ---------- Données de départ / import / export ---------- */
 function seed(withExample, me) {
   const year = new Date().getFullYear();
+  ensureCategories();
   if (!withExample) {
     put("settings", "settings", { annee: year, personnes: [me || "Personne 1", "Personne 2"], repartition: "prorata", epargneCommune: 0, exemple: false });
     put("livret", newId(), { nom: "Livret provisions", solde: 0, ordre: 1 });
@@ -705,16 +996,19 @@ function importState(src, opt = {}) {
   const fix = p => (ren && p === ren[0] ? ren[1] : p);
   const fixC = c => (ren && c === "Perso " + ren[0] ? "Perso " + ren[1] : c);
   put("settings", "settings", { annee, personnes, repartition: src.repartition === "egal" ? "egal" : "prorata", epargneCommune: num(src.epargneCommune), exemple: !!opt.exemple });
+  // catégories : on garde les ids de la sauvegarde (les lignes y renvoient) ; sans catégories dans le fichier, on prend celles par défaut
+  if (Array.isArray(src.categories) && src.categories.length) src.categories.forEach(c => put("categorie", c.id, { nom: c.nom, sens: c.sens === "revenu" ? "revenu" : "depense", icone: c.icone || "🏷️", couleur: c.couleur || CAT_COLORS[0], ordre: c.ordre || Date.now() }));
+  else ensureCategories();
   let o = 1;
   const idMap = {};
   const nid = old => (idMap[old] = idMap[old] || newId());
   (src.livrets || []).forEach(l => put("livret", nid(l.id), { nom: l.nom, solde: num(l.solde), ordre: o++ }));
-  (src.revenus || []).forEach(r => put("revenu", nid(r.id), { libelle: r.libelle, personne: fix(r.personne), type: r.type, frequence: r.frequence === "Mensuel" ? "Mensuel" : "Ponctuel", mois: Number(r.mois) || 1, montant: num(r.montant), ordre: o++ }));
-  (src.charges || []).forEach(c => put("charge", nid(c.id), { libelle: c.libelle, categorie: c.categorie, compte: fixC(c.compte), montant: num(c.montant), ordre: o++ }));
+  (src.revenus || []).forEach(r => put("revenu", nid(r.id), { libelle: r.libelle, personne: fix(r.personne), type: r.type, ...(r.categorie != null ? { categorie: r.categorie } : {}), frequence: r.frequence === "Mensuel" ? "Mensuel" : "Ponctuel", mois: Number(r.mois) || 1, montant: num(r.montant), ordre: o++ }));
+  (src.charges || []).forEach(c => put("charge", nid(c.id), { libelle: c.libelle, categorie: c.categorie || "Autre", compte: fixC(c.compte), montant: num(c.montant), ordre: o++ }));
   (src.provisions || []).forEach(p => put("provision", nid(p.id), { libelle: p.libelle, livret: p.livret ? nid(p.livret) : "", montant: num(p.montant), mois: Number(p.mois) || 1, ordre: o++ }));
-  (src.enveloppes || []).forEach(e => put("enveloppe", nid(e.id), { libelle: e.libelle, prevu: num(e.prevu), ordre: o++ }));
+  (src.enveloppes || []).forEach(e => put("enveloppe", nid(e.id), { libelle: e.libelle, prevu: num(e.prevu), ...(e.categorie ? { categorie: e.categorie } : {}), ordre: o++ }));
   if (Array.isArray(src.depenses)) {
-    src.depenses.forEach(d => put("depense", newId(), { enveloppe: nid(d.enveloppe), annee: Number(d.annee) || annee, mois: Number(d.mois) || 1, montant: num(d.montant), note: d.note || "", par: d.par || "", date: d.date || new Date().toISOString() }));
+    src.depenses.forEach(d => put("depense", newId(), { enveloppe: nid(d.enveloppe), ...("categorie" in d ? { categorie: d.categorie } : {}), annee: Number(d.annee) || annee, mois: Number(d.mois) || 1, montant: num(d.montant), note: d.note || "", par: d.par || "", date: d.date || new Date().toISOString() }));
   } else {
     (src.enveloppes || []).forEach(e => Object.entries(e.reel || {}).forEach(([m, v]) => {
       if (v === "" || v == null) return;
@@ -725,7 +1019,7 @@ function importState(src, opt = {}) {
 function exportState() {
   const S = state();
   return { format: "budget-familial", version: 2, exportedAt: new Date().toISOString(), annee: S.annee, personnes: S.personnes, repartition: S.repartition, epargneCommune: S.epargneCommune,
-    livrets: S.livrets, revenus: S.revenus, charges: S.charges, provisions: S.provisions,
+    categories: S.categories, livrets: S.livrets, revenus: S.revenus, charges: S.charges, provisions: S.provisions,
     enveloppes: S.enveloppes.map(e => { const reelM = {}; for (let m = 1; m <= 12; m++) { const v = reel(S, e.id, m); if (v) reelM[m] = Math.round(v * 100) / 100; } return { ...e, reel: reelM }; }),
     depenses: S.depenses };
 }
