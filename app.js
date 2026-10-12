@@ -842,6 +842,7 @@ function renderSheet(first) {
       <div class="field"><span>Enveloppe</span><div class="chips">${S.enveloppes.map(e => `<button type="button" data-chip="${e.id}" aria-pressed="${d.enveloppe === e.id}">${esc(e.libelle)}</button>`).join("") || '<span class="muted">Créez d\'abord une enveloppe dans Budget.</span>'}</div></div>
       <div class="field"><span>Catégorie</span><div class="chips cats">${S.categories.filter(c => c.sens === "depense").map(c => `<button type="button" data-catchip="${esc(c.id)}" aria-pressed="${d.categorie === c.id}" style="--cc:${esc(c.couleur)}">${esc(c.icone)} ${esc(c.nom)}</button>`).join("") || '<span class="muted">Créez des catégories dans Budget.</span>'}</div></div>
       <label class="field"><span>Note (facultatif)</span><input id="f-note" data-f="note" value="${esc(d.note || "")}" placeholder="Ex. Marché, plein d'essence…"></label>
+      ${"compte" in d ? `<label class="field"><span>Compte</span><select id="f-compte" data-f="compte">${comptesOf(S).map(c => `<option value="${esc(c)}" ${c === d.compte ? "selected" : ""}>${esc(compteNom(c))}</option>`).join("")}</select></label>` : ""}
       <label class="field"><span>Mois</span><select id="f-mois" data-f="mois">${MOIS.map((n, i) => `<option value="${i + 1}" ${Number(d.mois) === i + 1 ? "selected" : ""}>${n} ${d.annee || S.annee}</option>`).join("")}</select></label>`;
   } else {
     body = fieldsFor(k, S, d).map(([f, label, type, opts]) => {
@@ -876,6 +877,7 @@ function saveSheet() {
     if (!num(d.montant)) return err("Indiquez un montant.");
     if (!d.enveloppe && !d.ref) return err("Choisissez une enveloppe.");
     if (!id) { d.date = new Date().toISOString(); d.par = app.myName || ""; d.annee = state().annee; }
+    if (d.compte) d.par = comptePar(d.compte); // dépense d'un relevé : « par » suit le compte
   } else {
     const nameF = kind === "livret" || kind === "categorie" ? "nom" : "libelle";
     if (!String(d[nameF] || "").trim()) return err("Donnez-lui un nom.");
@@ -1034,12 +1036,13 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = fal
 function go(screen) { app.screen = screen; app.authErr = ""; render(); }
 
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq],[data-rdel],[data-rundo],[data-radd]");
+  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq],[data-rdel],[data-rundo],[data-radd],[data-rcompte]");
   if (!t) return;
   if (t.dataset.stype) { search.type = t.dataset.stype; refreshSearch(); return; }
   if (t.dataset.rdel) { const it = app.items.get(t.dataset.rdel); if (it) del(it.kind, it.id); return; }
   if (t.dataset.rundo) { const it = app.items.get(t.dataset.rundo); if (it) put(it.kind, it.id, it.data); return; }
   if (t.dataset.radd) { reportAddAnyway(Number(t.dataset.radd)); return; }
+  if (t.dataset.rcompte) { reportPickCompte(t.dataset.rcompte); return; }
   if ("sq" in t.dataset) { search.q = t.dataset.sq; const q = $("#q"); q.value = search.q; q.focus(); refreshSearch(); return; }
   if (t.dataset.chip) {
     const d = sheet.draft; d.enveloppe = t.dataset.chip;
@@ -1107,6 +1110,7 @@ document.addEventListener("input", e => {
 document.addEventListener("change", e => {
   const el = e.target;
   if (el.id === "importFile" || el.id === "pdfFile") { const f = el.files[0]; el.value = ""; return doImport(f); } // on ne garde pas de référence au fichier
+  if (el.id === "rcompte") { reportSetCompte(el.value); return; }
   if ("aper" in el.dataset) { app.month = Number(el.value); app.aopen = null; render(); return; }
   if (el.dataset.setting) {
     const k = el.dataset.setting; let v = el.value;
@@ -1121,6 +1125,7 @@ document.addEventListener("change", e => {
     setSettings({ personnes });
     S.revenus.filter(r => r.personne === old).forEach(r => put("revenu", r.id, { ...app.items.get(r.id).data, personne: nw }));
     S.charges.filter(c => c.compte === "Perso " + old).forEach(c => put("charge", c.id, { ...app.items.get(c.id).data, compte: "Perso " + nw }));
+    S.depenses.filter(d => d.compte === "Perso " + old).forEach(d => put("depense", d.id, { ...app.items.get(d.id).data, compte: "Perso " + nw, par: nw }));
   }
 });
 document.addEventListener("submit", async e => {
@@ -1359,7 +1364,12 @@ const words4 = s => new Set(fold(s).split(/[^a-z0-9]+/).filter(w => w.length >= 
 /* Repère les opérations déjà présentes dans le budget : même relevé déjà importé, dépense saisie à la main
  * (même montant, à quelques jours près), charge mensuelle, dépense annuelle du mois ou revenu du même montant.
  * Chaque ligne existante ne sert qu'une fois (une fois par mois pour les charges et revenus mensuels). */
-function findDuplicates(S, ops) {
+// Comptes possibles d'un relevé : « Joint » ou « Perso <prénom> » (comme le compte des charges).
+const comptesOf = S => ["Joint", ...S.personnes.map(p => "Perso " + p)];
+const compteNom = c => (c === "Joint" ? "Compte joint" : "Compte perso " + c.slice(6));
+const comptePar = c => (c === "Joint" ? "Compte joint" : c.slice(6));      // « par » des dépenses
+const comptePersonne = c => (c === "Joint" ? "Commun" : c.slice(6));       // « personne » des revenus
+function findDuplicates(S, ops, compte) {
   const byRef = new Map();
   for (const it of app.items.values()) if (it.data && it.data.ref) byRef.set(it.data.ref, it);
   const pairs = [];
@@ -1372,13 +1382,13 @@ function findDuplicates(S, ops) {
     if (o.montant < 0) {
       const v = -o.montant;
       S.depenses.forEach(d => {
-        if (!sameMoney(d.montant, v)) return;
+        if (!sameMoney(d.montant, v) || (d.compte && d.compte !== compte)) return;
         const dt = new Date(d.date), sameMonth = Number(d.annee) === o.y && Number(d.mois) === o.m;
         const diff = isNaN(dt) ? null : Math.abs(dayNum(dt.getFullYear(), dt.getMonth() + 1, dt.getDate()) - od);
         if (diff != null && diff <= 6) add("depense", d.id, d.id, diff + near(d.note));
         else if (sameMonth) add("depense", d.id, d.id, 10 + near(d.note)); // saisie du même mois, enregistrée plus tard
       });
-      S.charges.forEach(c => { if (sameMoney(c.montant, v)) add("charge", c.id, `${c.id}:${o.m}`, 20 + near(c.libelle)); });
+      S.charges.forEach(c => { if (sameMoney(c.montant, v) && (!c.compte || c.compte === compte)) add("charge", c.id, `${c.id}:${o.m}`, 20 + near(c.libelle)); });
       S.provisions.forEach(p => { if (sameMoney(p.montant, v) && Number(p.mois) === o.m) add("provision", p.id, p.id, 25 + near(p.libelle)); });
     } else {
       S.revenus.forEach(r => {
@@ -1395,13 +1405,13 @@ function findDuplicates(S, ops) {
     used.add(p.key); o.match = { kind: p.kind, id: p.id, how: "saisie" };
   });
 }
-function addOp(S, o) {
+function addOp(S, o, compte) {
   const id = newId();
-  if (o.montant < 0) put("depense", id, { enveloppe: "", categorie: bankCat(S, o.libelle, "depense"), annee: o.y, mois: o.m, montant: -o.montant, note: o.libelle, par: app.myName || "", date: o.date + "T12:00:00.000Z", ref: o.ref });
-  else put("revenu", id, { libelle: o.libelle, personne: S.personnes.includes(app.myName) ? app.myName : S.personnes[0], type: "Autre", categorie: bankCat(S, o.libelle, "revenu"), frequence: "Ponctuel", mois: o.m, montant: o.montant, ordre: Date.now(), ref: o.ref });
+  if (o.montant < 0) put("depense", id, { enveloppe: "", categorie: bankCat(S, o.libelle, "depense"), annee: o.y, mois: o.m, montant: -o.montant, note: o.libelle, par: comptePar(compte), compte, date: o.date + "T12:00:00.000Z", ref: o.ref });
+  else put("revenu", id, { libelle: o.libelle, personne: comptePersonne(compte), type: "Autre", categorie: bankCat(S, o.libelle, "revenu"), frequence: "Ponctuel", mois: o.m, montant: o.montant, ordre: Date.now(), ref: o.ref });
   return { id, kind: o.montant < 0 ? "depense" : "revenu" };
 }
-function applyStatement(ops) {
+function applyStatement(ops, compte) {
   const S = state(), annee = Number(S.annee), count = {};
   ops.sort((a, b) => a.date.localeCompare(b.date)).forEach(o => {
     [o.y, o.m, o.d] = o.date.split("-").map(Number);
@@ -1410,8 +1420,24 @@ function applyStatement(ops) {
     o.ref = `pdf:${hash(k)}:${count[k]}`;
   });
   const inYear = ops.filter(o => o.y === annee);
-  findDuplicates(S, inYear);
-  return { total: ops.length, hors: ops.length - inYear.length, annee, added: inYear.filter(o => !o.match).map(o => addOp(S, o)), dups: inYear.filter(o => o.match) };
+  findDuplicates(S, inYear, compte);
+  return { total: ops.length, hors: ops.length - inYear.length, annee, compte, added: inYear.filter(o => !o.match).map(o => addOp(S, o, compte)), dups: inYear.filter(o => o.match) };
+}
+// Choix du compte (après la lecture, avant l'ajout). Le dernier compte choisi est proposé en premier.
+function reportPickCompte(compte) {
+  if (!report || !report.pick) return;
+  LS.set("bf:pdfCompte", compte);
+  report = applyStatement(report.ops, compte);
+  refreshReport();
+}
+// Changer de compte après coup : les lignes ajoutées depuis le relevé suivent.
+function reportSetCompte(compte) {
+  if (!report || !report.added) return;
+  report.compte = compte; LS.set("bf:pdfCompte", compte);
+  report.added.filter(a => !a.manual).forEach(a => {
+    const it = app.items.get(a.id); if (!it) return;
+    put(it.kind, it.id, it.kind === "depense" ? { ...it.data, compte, par: comptePar(compte) } : { ...it.data, personne: comptePersonne(compte) }, it.deleted);
+  });
 }
 async function importPdf(file) {
   if (!window.RelevePDF) { toast("Lecture des PDF indisponible"); return; }
@@ -1425,13 +1451,13 @@ async function importPdf(file) {
     closeReport(); toast(e && e.name === "PasswordException" ? "Ce PDF est protégé par un mot de passe" : "Impossible de lire ce PDF"); return;
   }
   if (!res.tables) { closeReport(); toast("Aucun tableau DATE · LIBELLE · VALEUR · DEBIT · CREDIT dans ce PDF"); return; }
-  report = applyStatement(res.ops);
-  showReport();
+  report = { pick: true, ops: res.ops };              // reste en mémoire seulement, le temps de choisir le compte
+  refreshReport();
 }
 function reportAddAnyway(i) {
   const o = report && report.dups[i]; if (!o) return;
   report.dups.splice(i, 1);
-  report.added.push(addOp(state(), { ...o, ref: o.match.how === "ref" ? `${o.ref}+${newId().slice(0, 4)}` : o.ref }));
+  report.added.push(addOp(state(), { ...o, ref: o.match.how === "ref" ? `${o.ref}+${newId().slice(0, 4)}` : o.ref }, report.compte));
   toast("Ligne ajoutée");
 }
 // Ligne existante à laquelle une opération correspond.
@@ -1466,9 +1492,18 @@ function reportDupRow(S, o, i) {
 }
 function reportHTML(S) {
   if (report.loading) return `<section class="card"><p class="empty">Lecture du relevé…</p></section>`;
+  const comptes = comptesOf(S);
+  if (report.pick) {
+    const last = comptes.includes(LS.get("bf:pdfCompte", "")) ? LS.get("bf:pdfCompte", "") : "Joint";
+    const ord = [last, ...comptes.filter(c => c !== last)];
+    return `<section class="card"><h2>Sur quel compte ?<small>${plural(report.ops.length, "opération")} lue${report.ops.length > 1 ? "s" : ""}</small></h2>
+      <p class="note" style="margin-top:0">Choisissez le compte de ce relevé : ses dépenses et ses revenus y seront rattachés, et seules les charges de ce compte servent à repérer ce qui est déjà saisi.</p>
+      <div class="rcomptes">${ord.map((c, i) => `<button type="button" class="btn ${i ? "line" : ""} block" data-rcompte="${esc(c)}">${esc(compteNom(c))}</button>`).join("")}</div></section>`;
+  }
   const r = report, live = r.added.filter(a => { const it = app.items.get(a.id); return it && !it.deleted; });
   const nDep = live.filter(a => a.kind === "depense").length, nRev = live.length - nDep;
   return `<section class="card"><h2>Résumé<small>${plural(r.total, "opération")} lue${r.total > 1 ? "s" : ""}</small></h2>
+      <div class="kv"><span>Compte</span><select id="rcompte" class="rsel" aria-label="Compte du relevé">${comptes.map(c => `<option value="${esc(c)}" ${c === r.compte ? "selected" : ""}>${esc(c === "Joint" ? "Compte joint" : c)}</option>`).join("")}</select></div>
       <div class="kv"><span>Ajoutées</span><b>${plural(nDep, "dépense")}${nRev ? ` · ${plural(nRev, "revenu")}` : ""}</b></div>
       <div class="kv"><span>Déjà saisies, non ajoutées</span><b>${r.dups.length}</b></div>
       ${r.hors ? `<div class="kv"><span>Hors de l'année ${r.annee}, ignorées</span><b>${r.hors}</b></div>` : ""}
