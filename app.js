@@ -821,6 +821,7 @@ function openSheet(kind, id, preset = {}) {
   if (kind === "charge") draft.categorie = chargeCat(S, draft);
   if (kind === "enveloppe") draft.categorie = resolveCat(S, draft.categorie, "depense");
   if (kind === "depense") draft.categorie = it ? depCat(S, it.data) : (preset.categorie ?? envCat(S, S.enveloppes.find(e => e.id === draft.enveloppe)));
+  if (kind === "depense" && !comptesOf(S).includes(draft.compte)) draft.compte = it ? compteFromPar(S, draft.par) : defaultCompte(S);
   sheet = { kind, id, draft, confirmDel: false };
   renderSheet(true);
 }
@@ -842,7 +843,7 @@ function renderSheet(first) {
       <div class="field"><span>Enveloppe</span><div class="chips">${S.enveloppes.map(e => `<button type="button" data-chip="${e.id}" aria-pressed="${d.enveloppe === e.id}">${esc(e.libelle)}</button>`).join("") || '<span class="muted">Créez d\'abord une enveloppe dans Budget.</span>'}</div></div>
       <div class="field"><span>Catégorie</span><div class="chips cats">${S.categories.filter(c => c.sens === "depense").map(c => `<button type="button" data-catchip="${esc(c.id)}" aria-pressed="${d.categorie === c.id}" style="--cc:${esc(c.couleur)}">${esc(c.icone)} ${esc(c.nom)}</button>`).join("") || '<span class="muted">Créez des catégories dans Budget.</span>'}</div></div>
       <label class="field"><span>Note (facultatif)</span><input id="f-note" data-f="note" value="${esc(d.note || "")}" placeholder="Ex. Marché, plein d'essence…"></label>
-      ${"compte" in d ? `<label class="field"><span>Compte</span><select id="f-compte" data-f="compte">${comptesOf(S).map(c => `<option value="${esc(c)}" ${c === d.compte ? "selected" : ""}>${esc(compteNom(c))}</option>`).join("")}</select></label>` : ""}
+      <div class="field"><span>Payé par</span><div class="chips">${comptesOf(S).map(c => `<button type="button" data-compte="${esc(c)}" aria-pressed="${d.compte === c}">${esc(c === "Joint" ? "Compte joint" : c.slice(6))}</button>`).join("")}</div></div>
       <label class="field"><span>Mois</span><select id="f-mois" data-f="mois">${MOIS.map((n, i) => `<option value="${i + 1}" ${Number(d.mois) === i + 1 ? "selected" : ""}>${n} ${d.annee || S.annee}</option>`).join("")}</select></label>`;
   } else {
     body = fieldsFor(k, S, d).map(([f, label, type, opts]) => {
@@ -877,7 +878,8 @@ function saveSheet() {
     if (!num(d.montant)) return err("Indiquez un montant.");
     if (!d.enveloppe && !d.ref) return err("Choisissez une enveloppe.");
     if (!id) { d.date = new Date().toISOString(); d.par = app.myName || ""; d.annee = state().annee; }
-    if (d.compte) d.par = comptePar(d.compte); // dépense d'un relevé : « par » suit le compte
+    if (d.compte) { d.par = comptePar(d.compte); if (!id && !d.ref) LS.set("bf:depCompte", d.compte); } // « par » suit le compte choisi
+    else delete d.compte;
   } else {
     const nameF = kind === "livret" || kind === "categorie" ? "nom" : "libelle";
     if (!String(d[nameF] || "").trim()) return err("Donnez-lui un nom.");
@@ -1036,7 +1038,7 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = fal
 function go(screen) { app.screen = screen; app.authErr = ""; render(); }
 
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq],[data-rdel],[data-rundo],[data-radd],[data-rcompte]");
+  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq],[data-rdel],[data-rundo],[data-radd],[data-rcompte],[data-compte]");
   if (!t) return;
   if (t.dataset.stype) { search.type = t.dataset.stype; refreshSearch(); return; }
   if (t.dataset.rdel) { const it = app.items.get(t.dataset.rdel); if (it) del(it.kind, it.id); return; }
@@ -1049,6 +1051,7 @@ document.addEventListener("click", async e => {
     if (!d._ct) { const S = state(); d.categorie = envCat(S, S.enveloppes.find(x => x.id === d.enveloppe)); } // la catégorie suit l'enveloppe tant qu'on n'a pas choisi
     renderSheet(); return;
   }
+  if (t.dataset.compte) { sheet.draft.compte = t.dataset.compte; renderSheet(); return; }
   if (t.dataset.catchip) { const d = sheet.draft; d.categorie = d.categorie === t.dataset.catchip ? "" : t.dataset.catchip; d._ct = true; renderSheet(); return; }
   if (t.dataset.pick) { const i = t.dataset.pick.indexOf(":"); sheet.draft[t.dataset.pick.slice(0, i)] = t.dataset.pick.slice(i + 1); renderSheet(); return; }
   if (t.dataset.aseg) { app.aseg = t.dataset.aseg; app.aopen = null; LS.set("bf:aseg", app.aseg); window.scrollTo(0, 0); render(); return; }
@@ -1368,6 +1371,12 @@ const words4 = s => new Set(fold(s).split(/[^a-z0-9]+/).filter(w => w.length >= 
 const comptesOf = S => ["Joint", ...S.personnes.map(p => "Perso " + p)];
 const compteNom = c => (c === "Joint" ? "Compte joint" : "Compte perso " + c.slice(6));
 const comptePar = c => (c === "Joint" ? "Compte joint" : c.slice(6));      // « par » des dépenses
+// Compte d'une ancienne dépense (sans compte) d'après « par » ; compte proposé pour une nouvelle saisie.
+const compteFromPar = (S, par) => (par === "Compte joint" ? "Joint" : S.personnes.includes(par) ? "Perso " + par : "");
+function defaultCompte(S) {
+  const last = LS.get("bf:depCompte", "");
+  return comptesOf(S).includes(last) ? last : S.personnes.includes(app.myName) ? "Perso " + app.myName : "Joint";
+}
 const comptePersonne = c => (c === "Joint" ? "Commun" : c.slice(6));       // « personne » des revenus
 function findDuplicates(S, ops, compte) {
   const byRef = new Map();
