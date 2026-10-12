@@ -156,6 +156,7 @@ body::before{content:"";position:fixed;top:0;left:0;right:0;height:var(--sat);z-
 .aseg button{flex:1 1 0;padding:8px 6px;border-radius:99px;font-size:14px;font-weight:600;color:var(--accent);white-space:nowrap;display:grid;place-items:center}
 .dfilter{margin:2px 0 8px}
 .period .dfilter{margin:8px 0 0}
+.months + .dfilter{margin:0 0 12px}
 .dfilter button{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .aseg button.ov{flex:0 0 40px;color:var(--muted)}
 .aseg button.ov svg{width:18px;height:18px}
