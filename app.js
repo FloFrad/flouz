@@ -272,6 +272,7 @@ function flows(S, ms) {
     const v = mensuel ? num(r.montant) * ms.length : (ms.includes(Number(r.mois)) ? num(r.montant) : 0);
     if (v) inn.push({ k: "revenu", id: r.id, montant: v, cat: revenuCat(S, r), fixe: mensuel, titre: r.libelle || "Revenu", sub: `${r.personne || ""} · ${mensuel ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]}` });
   });
+  (S.virements || []).forEach(v => (v.sens === "in" ? inn : out).push({ k: "virement", id: v.id, montant: v.montant * ms.length, cat: "_vir", fixe: true, titre: v.titre, sub: ms.length > 1 ? "Virement mensuel · 12 mois" : "Virement mensuel" }));
   return { out, inn };
 }
 const sumOf = list => list.reduce((a, x) => a + x.montant, 0);
@@ -548,9 +549,10 @@ function gauge(pct) {
   const p = Math.max(0, Math.min(100, pct));
   return `<svg class="gauge" viewBox="0 0 120 68" aria-hidden="true"><path d="M10 60A50 50 0 0 1 110 60" pathLength="100" fill="none" stroke="var(--surface-2)" stroke-width="12" stroke-linecap="round"/><path d="M10 60A50 50 0 0 1 110 60" pathLength="100" fill="none" stroke="var(--c-epargne)" stroke-width="12" stroke-linecap="round" stroke-dasharray="${p} 100"/></svg>`;
 }
+const editAttr = it => (it.k === "virement" ? 'data-tab="livrets"' : `data-edit="${it.k}" data-id="${esc(it.id)}"`);
 function itemRow(it, S, mode) {
   const extra = mode === "simple" && it.cat !== undefined ? ` · ${esc(catMeta(S, it.cat).nom)}` : "";
-  return `<button class="row sm" data-edit="${it.k}" data-id="${it.id}"><div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc(it.sub)}${extra}</div></div><div class="amt">${eurc(it.montant)}</div></button>`;
+  return `<button class="row sm" ${editAttr(it)}><div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc(it.sub)}${extra}</div></div><div class="amt">${eurc(it.montant)}</div></button>`;
 }
 
 function vAnalyse(S0) {
@@ -625,7 +627,7 @@ function evolution(S, mode) {
 
 function vOverview(S, per, out, totIn, totOut) {
   const n = per.ms.length, bal = totIn - totOut;
-  const chFix = S.charges.reduce((a, c) => a + num(c.montant), 0), envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
+  const chFix = S.charges.reduce((a, c) => a + num(c.montant), 0) + virOut(S), envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
   const budget = (chFix + envPrevu) * n, left = budget - totOut;
   const prov = S.provisions.reduce((a, p) => a + num(p.montant) / 12, 0) * n;
   const objectif = totIn - budget - prov, reelEp = totIn - totOut - prov;
@@ -652,7 +654,7 @@ function vFlow(S, per, sens, list, total) {
   const n = per.ms.length;
   let budgetCard = "";
   if (sens === "depense") {
-    const budget = (S.charges.reduce((a, c) => a + num(c.montant), 0) + S.enveloppes.reduce((a, e) => a + num(e.prevu), 0)) * n;
+    const budget = (S.charges.reduce((a, c) => a + num(c.montant), 0) + virOut(S) + S.enveloppes.reduce((a, e) => a + num(e.prevu), 0)) * n;
     const pct = budget ? Math.round(total / budget * 100) : 0;
     budgetCard = `<button class="card budget" data-tab="budget"><div class="brow"><span class="blab"><span class="ico xs">${ICON.budget.replace("<svg", '<svg width="14" height="14"')}</span>Budget <i class="dot ${total > budget ? "bad" : ""}"></i></span><span class="bamt"><b>${eurc(total)}</b> / ${eur(budget)}</span>${ICON.chev}</div>
       <div class="brow"><div class="bar ${total > budget ? "over" : ""} grow"><i style="width:${Math.min(pct, 100)}%"></i></div><span class="pct">${pct} %</span></div></button>`;
@@ -661,7 +663,7 @@ function vFlow(S, per, sens, list, total) {
     const key = `${sens}:${g.key}`, open = app.aopen === key;
     const pct = total ? Math.round(g.total / total * 100) : 0;
     const items = [...g.items].sort((a, b) => b.montant - a.montant);
-    const edit = mode === "cat" && g.key !== "_none"
+    const edit = mode === "cat" && g.key !== "_none" && g.key !== "_vir"
       ? `<button class="btn line block sm" data-edit="categorie" data-id="${esc(g.key)}">Modifier la catégorie</button>`
       : (g.key === "_none" ? `<p class="note" style="margin:0">Touchez une ligne, puis choisissez sa catégorie.</p>` : "");
     return `<div class="grp"><button class="row catrow" data-opencat="${esc(key)}" aria-expanded="${open}">${ico(g.meta)}<div class="main"><div class="t">${esc(g.meta.nom)}</div><div class="s">${pct} % • ${plural(g.items.length, noun)}</div></div><div class="amt">${eurc(g.total)}</div><span class="chev-wrap ${open ? "open" : ""}">${ICON.chev}</span></button>
@@ -682,8 +684,9 @@ function vRec(S, per) {
   const rev = S.revenus.filter(r => r.frequence === "Mensuel").map(r => ({ k: "revenu", id: r.id, titre: r.libelle, montant: num(r.montant) * n, meta: catMeta(S, revenuCat(S, r)), sub: r.personne || "" }));
   const ch = S.charges.map(c => ({ k: "charge", id: c.id, titre: c.libelle, montant: num(c.montant) * n, meta: catMeta(S, chargeCat(S, c)), sub: c.compte || "" }));
   const pr = S.provisions.map(p => ({ k: "provision", id: p.id, titre: p.libelle, montant: num(p.montant) / 12 * n, meta: { icone: "🐷", couleur: "#C28316" }, sub: `${MOIS[(Number(p.mois) || 1) - 1]} · ${eur(p.montant)} / an` }));
+  (S.virements || []).forEach(v => (v.sens === "in" ? rev : ch).push({ k: "virement", id: v.id, titre: v.titre, montant: v.montant * n, meta: catMeta(S, "_vir"), sub: "virement mensuel" }));
   const T = L => sumOf(L);
-  const block = (title, L) => `<section class="card"><h2>${title}<small>${eurc(T(L))}</small></h2><div class="list">${[...L].sort((a, b) => b.montant - a.montant).map(it => `<button class="row" data-edit="${it.k}" data-id="${it.id}">${ico(it.meta, "sm")}<div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc([it.sub, it.meta.nom].filter(Boolean).join(" · "))}</div></div><div class="amt">${eurc(it.montant)}</div></button>`).join("") || `<p class="empty">Rien pour l'instant.</p>`}</div></section>`;
+  const block = (title, L) => `<section class="card"><h2>${title}<small>${eurc(T(L))}</small></h2><div class="list">${[...L].sort((a, b) => b.montant - a.montant).map(it => `<button class="row" ${editAttr(it)}>${ico(it.meta, "sm")}<div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc([it.sub, it.meta.nom].filter(Boolean).join(" · "))}</div></div><div class="amt">${eurc(it.montant)}</div></button>`).join("") || `<p class="empty">Rien pour l'instant.</p>`}</div></section>`;
   const reste = T(rev) - T(ch) - T(pr);
   return `<section class="card"><h2>Récurrences<small>${sfx}</small></h2>
     <div class="kv"><span>Revenus réguliers</span><b>${eurc(T(rev))}</b></div>
@@ -1403,11 +1406,19 @@ const filtreCompte = S => (comptesOf(S).includes(app.dcompte) ? app.dcompte : "a
 const compteFilter = (S, fc) => `<div class="aseg dfilter" role="group" aria-label="Filtrer par compte">${[["all", "Tous"], ...comptesOf(S).map(c => [c, c === "Joint" ? "Joint" : c.slice(6)])].map(([k, l]) => `<button type="button" data-dcompte="${esc(k)}" aria-pressed="${fc === k}">${esc(l)}</button>`).join("")}</div>`;
 // Budget vu d'un seul compte : ses dépenses, ses charges (« Joint » par défaut), les revenus de sa personne
 // (« Commun » pour le joint) et, pour le joint, les provisions (elles passent par le compte joint). Les enveloppes restent communes.
+// Les virements mensuels vers le compte joint (calculés comme dans Livrets) entrent sur le joint et sortent des comptes perso.
+// Virement prévu d'un compte perso vers le joint : une sortie budgétée, comme une charge fixe.
+const virOut = S => (S.virements || []).filter(v => v.sens === "out").reduce((a, v) => a + v.montant, 0);
+const VIR_CAT = { id: "_vir", nom: "Virements internes", icone: "🔁", couleur: "#7A8B99", sens: "" };
 function forCompte(S, fc) {
   if (fc === "all") return S;
-  const pers = comptePersonne(fc);
+  const pers = comptePersonne(fc), j = joint(S);
+  const virements = j.pers.filter(p => p.vir > 0 && (fc === "Joint" || fc === "Perso " + p.nom)).map(p => fc === "Joint"
+    ? { id: "vir-" + p.nom, sens: "in", titre: `Virement de ${p.nom}`, montant: p.vir }
+    : { id: "vir-" + p.nom, sens: "out", titre: "Virement vers le compte joint", montant: p.vir });
   return { ...S, depenses: S.depenses.filter(d => depCompte(S, d) === fc), charges: S.charges.filter(c => (c.compte || "Joint") === fc),
-    revenus: S.revenus.filter(r => r.personne === pers), provisions: fc === "Joint" ? S.provisions : [] };
+    revenus: S.revenus.filter(r => r.personne === pers), provisions: fc === "Joint" ? S.provisions : [],
+    virements, catById: { ...S.catById, _vir: VIR_CAT } };
 }
 const comptePersonne = c => (c === "Joint" ? "Commun" : c.slice(6));       // « personne » des revenus
 function findDuplicates(S, ops, compte) {
