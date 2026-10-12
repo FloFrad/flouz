@@ -104,6 +104,17 @@ Les 17 catégories de départ (12 de dépenses, 5 de revenus) sont créées au p
 
 Format : `{"format":"releve-bancaire","operations":[{"ref":"…","date":"2026-09-08","libelle":"…","montant":-12.0,"categorie":"c-alim"}]}` (montant négatif = débit ; ids de catégories : `c-alim`, `c-auto`, `r-salaire`…).
 
+## Importer un relevé de compte PDF
+
+**Réglages → Importer un relevé PDF…** (ou le bouton en bas de **Dépenses**) : choisissez le relevé PDF de la banque.
+
+- L'app lit le tableau dont l'en-tête comporte les colonnes **DATE, LIBELLE, VALEUR, DEBIT, CREDIT** (sur une ou plusieurs pages). Les libellés sur plusieurs lignes sont recollés ; les lignes de solde et de total sont ignorées.
+- Un débit devient une **dépense** (sans enveloppe, catégorie devinée d'après le libellé), un crédit un **revenu ponctuel** du mois. Seules les opérations de l'année du budget sont importées.
+- **Ce qui est déjà saisi n'est pas ajouté** : une dépense du même montant saisie à quelques jours près (ou dans le même mois), une charge mensuelle ou une dépense annuelle du même montant, un revenu du même montant, ou une opération d'un relevé déjà importé.
+- À la fin, une page **Relevé importé** liste les lignes ajoutées et celles repérées comme déjà saisies (avec la ligne du budget correspondante). On peut y **modifier** une ligne (toucher), la **supprimer** (corbeille, puis *Rétablir* si besoin), **ajouter quand même** une ligne repérée, ou **ajouter une dépense** à la main.
+
+**Données sensibles** : le PDF est lu dans le téléphone (bibliothèque `vendor/pdfjs/`, sans connexion). Il n'est **ni envoyé, ni conservé** : ni le fichier, ni le relevé complet (solde, numéro de compte, adresse…) ne sont enregistrés, et le rapport disparaît en touchant *Terminé*. Seules les lignes ajoutées sont enregistrées dans le budget, comme une saisie normale (date, montant, libellé sans les numéros de carte). Les fichiers `*.pdf` sont ignorés par git.
+
 ## Bon à savoir
 
 - **Pas de réinstallation** : rien n'expire. Quand vous modifiez le code sur GitHub, l'app se met à jour à la prochaine ouverture (pensez à changer `VERSION` dans `sw.js`).
@@ -123,4 +134,5 @@ Format : `{"format":"releve-bancaire","operations":[{"ref":"…","date":"2026-09
 | `manifest.webmanifest`, `icons/` | Installation sur l'écran d'accueil |
 | `sw.js` | Fonctionnement hors ligne et mises à jour |
 | `vendor/supabase.js` | Bibliothèque Supabase (v2.117.3) |
+| `releve-pdf.js`, `vendor/pdfjs/` | Lecture des relevés PDF (pdf.js v4.10.38, licence Apache 2.0), chargée seulement à l'import |
 | `supabase/schema.sql` | Tables, règles de sécurité, invitations, temps réel |

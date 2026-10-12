@@ -82,6 +82,7 @@ const ICON = {
   prev: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>',
   next: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
   chev: '<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>'
 };
 
@@ -335,6 +336,7 @@ function render() {
   const sel = root.querySelector('.months [aria-pressed="true"]');
   if (sel && !render._scrolled) { sel.scrollIntoView({ inline: "center", block: "nearest" }); render._scrolled = true; }
   if (search) refreshSearch(); // une ligne modifiée depuis les résultats les met à jour
+  if (report) refreshReport();
 }
 const GEAR_BTN = `<button class="iconbtn" data-tab="settings" aria-label="Réglages">${ICON.gear}</button>`;
 const SEARCH_BTN = `<button class="iconbtn" data-act="openSearch" aria-label="Rechercher">${ICON.search}</button>`;
@@ -434,7 +436,8 @@ function vEnv(S) {
   <section class="card"><h2>Par enveloppe<small>touchez pour ajouter</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
   <section class="card"><h2>${m ? "Saisies du mois" : "Saisies de l'année"}<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}</small></h2><div class="list">
     ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"))} · ${dfmt(d.date)}${d.par ? " · " + esc(d.par) : ""}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
-  </div></section>`;
+  </div></section>
+  ${pdfButton("line")}`;
 }
 
 const SEGS = [["revenu", "Revenus"], ["charge", "Charges"], ["provision", "Provisions"], ["enveloppe", "Enveloppes"], ["categorie", "Catégories"]];
@@ -732,10 +735,14 @@ function vSettings(S) {
     <label class="field"><span>Répartition du compte joint</span><select id="s-rep" data-setting="repartition"><option value="prorata" ${S.repartition !== "egal" ? "selected" : ""}>Au prorata des salaires</option><option value="egal" ${S.repartition === "egal" ? "selected" : ""}>50 / 50</option></select></label>
     <label class="field"><span>Épargne commune programmée / mois</span><div class="euro"><input id="s-ep" type="text" inputmode="decimal" value="${esc(S.epargneCommune || "")}" data-setting="epargneCommune"></div></label>
   </div></section>
+  <section class="card"><h2>Relevé de compte</h2>
+    <p class="note" style="margin-top:0">Importez le relevé PDF de la banque : les débits deviennent des dépenses, les crédits des revenus, et ce qui est déjà saisi n'est pas ajouté. Le fichier est lu sur ce téléphone : il n'est ni envoyé, ni conservé.</p>
+    ${pdfButton("ghost")}
+  </section>
   <section class="card"><h2>Sauvegarde</h2>
     <p class="note" style="margin-top:0">Importez l'export JSON de la version web pour reprendre vos montants (remplace le budget). Un fichier de relevé bancaire, lui, s'ajoute sans rien remplacer.</p>
     <div class="btnrow"><button class="btn ghost" data-act="export">Exporter</button><label class="btn ghost" for="importFile">Importer…</label></div>
-    <input id="importFile" type="file" accept="application/json,.json" hidden>
+    <input id="importFile" type="file" accept="application/json,.json,application/pdf,.pdf" hidden>
     <div class="btnrow" style="margin-top:8px" id="clearZone"><button class="btn danger" data-act="askClear">Tout vider</button></div>
   </section>
   <section class="card"><div class="btnrow">${demo ? `<button class="btn line" data-act="quitDemo">Quitter la démo</button>` : `<button class="btn line" data-act="logout">Se déconnecter</button>`}</div>
@@ -817,7 +824,7 @@ function openSheet(kind, id, preset = {}) {
   sheet = { kind, id, draft, confirmDel: false };
   renderSheet(true);
 }
-function closeSheet() { sheet = null; $("#sheet").innerHTML = ""; document.body.style.overflow = search ? "hidden" : ""; }
+function closeSheet() { sheet = null; $("#sheet").innerHTML = ""; document.body.style.overflow = search || report ? "hidden" : ""; }
 function renderSheet(first) {
   if (!sheet) return;
   const S = state(), d = sheet.draft, k = sheet.kind;
@@ -875,7 +882,9 @@ function saveSheet() {
     if (kind === "categorie") { d.nom = d.nom.trim(); d.icone = String(d.icone || "").trim() || "🏷️"; }
   }
   if (!id) d.ordre = Date.now();
-  put(kind, id || newId(), d);
+  const nid = id || newId();
+  put(kind, nid, d);
+  if (!id && sheet.fromReport && report && report.added) { report.added.push({ id: nid, kind, manual: true }); refreshReport(); }
   if (kind === "depense" && !id) {
     const env = state().enveloppes.find(e => e.id === d.enveloppe);
     toast(`${eur2(d.montant)} ajoutés · ${env ? env.libelle : ""}`);
@@ -1018,16 +1027,19 @@ function openSearch() {
   refreshSearch();
   $("#q").focus();
 }
-function closeSearch() { search = null; $("#search").innerHTML = ""; document.body.style.overflow = sheet ? "hidden" : ""; }
+function closeSearch() { search = null; $("#search").innerHTML = ""; document.body.style.overflow = sheet || report ? "hidden" : ""; }
 
 /* ====================== Actions ====================== */
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => t.hidden = true, 2400); }
 function go(screen) { app.screen = screen; app.authErr = ""; render(); }
 
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq]");
+  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq],[data-rdel],[data-rundo],[data-radd]");
   if (!t) return;
   if (t.dataset.stype) { search.type = t.dataset.stype; refreshSearch(); return; }
+  if (t.dataset.rdel) { const it = app.items.get(t.dataset.rdel); if (it) del(it.kind, it.id); return; }
+  if (t.dataset.rundo) { const it = app.items.get(t.dataset.rundo); if (it) put(it.kind, it.id, it.data); return; }
+  if (t.dataset.radd) { reportAddAnyway(Number(t.dataset.radd)); return; }
   if ("sq" in t.dataset) { search.q = t.dataset.sq; const q = $("#q"); q.value = search.q; q.focus(); refreshSearch(); return; }
   if (t.dataset.chip) {
     const d = sheet.draft; d.enveloppe = t.dataset.chip;
@@ -1051,6 +1063,8 @@ document.addEventListener("click", async e => {
     case "closeSheet": closeSheet(); break;
     case "openSearch": openSearch(); break;
     case "closeSearch": closeSearch(); break;
+    case "closeReport": closeReport(); break;
+    case "reportNew": openSheet("depense"); sheet.fromReport = true; break;
     case "manageCats": app.tab = "budget"; app.seg = "categorie"; LS.set("bf:tab", app.tab); LS.set("bf:seg", app.seg); window.scrollTo(0, 0); render(); break;
     case "delAsk": sheet.confirmDel = true; renderSheet(); break;
     case "delCancel": sheet.confirmDel = false; renderSheet(); break;
@@ -1092,7 +1106,7 @@ document.addEventListener("input", e => {
 });
 document.addEventListener("change", e => {
   const el = e.target;
-  if (el.id === "importFile") return doImport(el.files[0]);
+  if (el.id === "importFile" || el.id === "pdfFile") { const f = el.files[0]; el.value = ""; return doImport(f); } // on ne garde pas de référence au fichier
   if ("aper" in el.dataset) { app.month = Number(el.value); app.aopen = null; render(); return; }
   if (el.dataset.setting) {
     const k = el.dataset.setting; let v = el.value;
@@ -1118,7 +1132,7 @@ document.addEventListener("submit", async e => {
   if (f.id === "joinForm") return joinHousehold(f.me.value.trim(), f.code.value.trim());
 });
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { if (sheet) closeSheet(); else if (search) closeSearch(); }
+  if (e.key === "Escape") { if (sheet) closeSheet(); else if (search) closeSearch(); else if (report && !report.loading) closeReport(); }
   else if (e.key === "Enter" && e.target.id === "q") e.target.blur(); // ferme le clavier pour voir les résultats
 });
 
@@ -1296,6 +1310,7 @@ function importReleve(src) {
 }
 function doImport(file) {
   if (!file) return;
+  if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) return importPdf(file);
   const r = new FileReader();
   r.onload = () => {
     try {
@@ -1310,6 +1325,169 @@ function doImport(file) {
   };
   r.readAsText(file);
 }
+
+/* ====================== Relevé de compte PDF ====================== */
+// Le PDF est lu dans le téléphone (pdf.js) : ni le fichier ni son contenu ne sont envoyés ou gardés.
+// Seules les lignes ajoutées deviennent des saisies du budget ; le rapport ne vit qu'en mémoire, le temps de le consulter.
+let report = null; // {loading} pendant la lecture, puis {total, hors, annee, added: [{id, kind}], dups: [op]}
+const pdfButton = cls => `<label class="btn ${cls} block" for="pdfFile">Importer un relevé PDF…</label><input id="pdfFile" type="file" accept="application/pdf,.pdf" hidden>`;
+// Catégorie devinée d'après le libellé bancaire (enseignes courantes), sinon d'après les mots-clés des enveloppes.
+const BANK_GUESS = [
+  [/totalenergies|\bedf\b|engie|veolia|\bsuez\b|eau de |loyer|syndic|leroy merlin|castorama|bricomarche|ikea/, "c-logement"],
+  [/amazon prime|free mobile|freebox|\borange\b|\bsfr\b|bouygues|\bsosh\b|netflix|spotify|deezer|disney|canal\+|apple\.com|icloud/, "c-telecom"],
+  [/carrefour|leclerc|auchan|intermarche|\blidl\b|\baldi\b|monoprix|franprix|casino|super ?u\b|hyper ?u\b|biocoop|picard|grand frais|netto|boulang|patiss|restau|mcdo|burger|uber ?eats|deliveroo/, "c-alim"],
+  [/\btotal\b|\besso\b|\bbp\b|\bshell\b|\bavia\b|carbur|sncf|ratp|navigo|autoroute|\baprr\b|sanef|vinci|peage|parking|blablacar/, "c-auto"],
+  [/pharma|medecin|docteur|dentist|opticien|optique|\bkine|laborat|hopital|clinique/, "c-sante"],
+  [/dgfip|impot|tresor public|\btaxe/, "c-impots"],
+  [/assur|mutuelle|\bmaif\b|\bmacif\b|matmut|\baxa\b|allianz|groupama|\bmma\b/, "c-assur"],
+  [/\bpret\b|echeance pret|credit immo|cetelem|cofidis/, "c-prets"],
+  [/\bzara\b|h&m|kiabi|decathlon|\bfnac\b|darty|amazon|cdiscount|primark|uniqlo|sephora/, "c-shopping"],
+  [/cinema|pathe|gaumont|\bugc\b|theatre|concert|musee|airbnb|booking|hotel/, "c-loisirs"],
+  [/ecole|cantine|creche|periscolaire|college|lycee/, "c-enfants"]
+];
+const BANK_GUESS_REV = [[/salaire|\bpaie\b|remuneration/, "r-salaire"], [/\bcaf\b|allocation|france travail|pole emploi/, "r-aides"], [/rembours|\bcpam\b|ameli|mutuelle/, "r-rembours"], [/prime|bonus|interessement|participation/, "r-primes"]];
+function bankCat(S, libelle, sens) {
+  const t = fold(libelle), hit = (sens === "revenu" ? BANK_GUESS_REV : BANK_GUESS).find(([re]) => re.test(t));
+  return resolveCat(S, hit ? hit[1] : sens === "revenu" ? "" : guessCat(libelle), sens);
+}
+// Empreinte courte d'une opération (date, montant, libellé) : réimporter le même relevé ne crée pas de doublon.
+function hash(s) { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36); }
+const dayNum = (y, m, d) => Math.round(Date.UTC(y, m - 1, d) / 864e5);
+const sameMoney = (a, b) => Math.abs(num(a) - num(b)) < .005;
+const words4 = s => new Set(fold(s).split(/[^a-z0-9]+/).filter(w => w.length >= 4));
+
+/* Repère les opérations déjà présentes dans le budget : même relevé déjà importé, dépense saisie à la main
+ * (même montant, à quelques jours près), charge mensuelle, dépense annuelle du mois ou revenu du même montant.
+ * Chaque ligne existante ne sert qu'une fois (une fois par mois pour les charges et revenus mensuels). */
+function findDuplicates(S, ops) {
+  const byRef = new Map();
+  for (const it of app.items.values()) if (it.data && it.data.ref) byRef.set(it.data.ref, it);
+  const pairs = [];
+  ops.forEach((o, i) => {
+    const old = byRef.get(o.ref);
+    if (old) { o.match = { kind: old.kind, id: old.id, how: "ref" }; return; }
+    const ow = words4(o.libelle), od = dayNum(o.y, o.m, o.d);
+    const near = lib => ([...words4(lib)].some(w => ow.has(w)) ? -1 : 0); // libellés qui se ressemblent : priorité
+    const add = (kind, id, key, score) => pairs.push({ i, kind, id, key, score });
+    if (o.montant < 0) {
+      const v = -o.montant;
+      S.depenses.forEach(d => {
+        if (!sameMoney(d.montant, v)) return;
+        const dt = new Date(d.date), sameMonth = Number(d.annee) === o.y && Number(d.mois) === o.m;
+        const diff = isNaN(dt) ? null : Math.abs(dayNum(dt.getFullYear(), dt.getMonth() + 1, dt.getDate()) - od);
+        if (diff != null && diff <= 6) add("depense", d.id, d.id, diff + near(d.note));
+        else if (sameMonth) add("depense", d.id, d.id, 10 + near(d.note)); // saisie du même mois, enregistrée plus tard
+      });
+      S.charges.forEach(c => { if (sameMoney(c.montant, v)) add("charge", c.id, `${c.id}:${o.m}`, 20 + near(c.libelle)); });
+      S.provisions.forEach(p => { if (sameMoney(p.montant, v) && Number(p.mois) === o.m) add("provision", p.id, p.id, 25 + near(p.libelle)); });
+    } else {
+      S.revenus.forEach(r => {
+        if (!sameMoney(r.montant, o.montant)) return;
+        if (r.frequence === "Mensuel") add("revenu", r.id, `${r.id}:${o.m}`, 20 + near(r.libelle));
+        else if (Number(r.mois) === o.m) add("revenu", r.id, r.id, 5 + near(r.libelle));
+      });
+    }
+  });
+  const used = new Set();
+  pairs.sort((a, b) => a.score - b.score).forEach(p => {
+    const o = ops[p.i];
+    if (o.match || used.has(p.key)) return;
+    used.add(p.key); o.match = { kind: p.kind, id: p.id, how: "saisie" };
+  });
+}
+function addOp(S, o) {
+  const id = newId();
+  if (o.montant < 0) put("depense", id, { enveloppe: "", categorie: bankCat(S, o.libelle, "depense"), annee: o.y, mois: o.m, montant: -o.montant, note: o.libelle, par: app.myName || "", date: o.date + "T12:00:00.000Z", ref: o.ref });
+  else put("revenu", id, { libelle: o.libelle, personne: S.personnes.includes(app.myName) ? app.myName : S.personnes[0], type: "Autre", categorie: bankCat(S, o.libelle, "revenu"), frequence: "Ponctuel", mois: o.m, montant: o.montant, ordre: Date.now(), ref: o.ref });
+  return { id, kind: o.montant < 0 ? "depense" : "revenu" };
+}
+function applyStatement(ops) {
+  const S = state(), annee = Number(S.annee), count = {};
+  ops.sort((a, b) => a.date.localeCompare(b.date)).forEach(o => {
+    [o.y, o.m, o.d] = o.date.split("-").map(Number);
+    const k = `${o.date}|${Math.round(o.montant * 100)}|${fold(o.libelle)}`;
+    count[k] = (count[k] || 0) + 1;                       // deux cafés identiques le même jour restent deux lignes
+    o.ref = `pdf:${hash(k)}:${count[k]}`;
+  });
+  const inYear = ops.filter(o => o.y === annee);
+  findDuplicates(S, inYear);
+  return { total: ops.length, hors: ops.length - inYear.length, annee, added: inYear.filter(o => !o.match).map(o => addOp(S, o)), dups: inYear.filter(o => o.match) };
+}
+async function importPdf(file) {
+  if (!window.RelevePDF) { toast("Lecture des PDF indisponible"); return; }
+  report = { loading: true }; showReport();
+  let res;
+  try {
+    const pages = await window.RelevePDF.extract(new Uint8Array(await file.arrayBuffer()), document.baseURI);
+    res = window.RelevePDF.parse(pages, Number(state().annee));
+  } catch (e) {
+    console.warn("pdf", e && e.name);
+    closeReport(); toast(e && e.name === "PasswordException" ? "Ce PDF est protégé par un mot de passe" : "Impossible de lire ce PDF"); return;
+  }
+  if (!res.tables) { closeReport(); toast("Aucun tableau DATE · LIBELLE · VALEUR · DEBIT · CREDIT dans ce PDF"); return; }
+  report = applyStatement(res.ops);
+  showReport();
+}
+function reportAddAnyway(i) {
+  const o = report && report.dups[i]; if (!o) return;
+  report.dups.splice(i, 1);
+  report.added.push(addOp(state(), { ...o, ref: o.match.how === "ref" ? `${o.ref}+${newId().slice(0, 4)}` : o.ref }));
+  toast("Ligne ajoutée");
+}
+// Ligne existante à laquelle une opération correspond.
+function matchInfo(S, m) {
+  const it = app.items.get(m.id), d = (it && it.data) || {}, gone = !it || it.deleted;
+  const what = {
+    depense: () => [d.note || S.enveloppes.find(e => e.id === d.enveloppe)?.libelle || "Dépense", `dépense du ${shortDate(d.date)}${d.par ? " · " + d.par : ""}`],
+    charge: () => [d.libelle || "Charge", "charge mensuelle"],
+    provision: () => [d.libelle || "Dépense annuelle", `dépense annuelle · ${MOIS[(Number(d.mois) || 1) - 1].toLowerCase()}`],
+    revenu: () => [d.libelle || "Revenu", d.frequence === "Mensuel" ? "revenu mensuel" : `revenu ponctuel · ${MOIS[(Number(d.mois) || 1) - 1].toLowerCase()}`]
+  }[m.kind] || (() => ["Ligne", ""]);
+  const [titre, sub] = what();
+  return { titre, sub: m.how === "ref" ? `déjà importée${gone ? ", puis supprimée" : ""}` : sub, gone };
+}
+const opDate = o => new Date(o.y, o.m - 1, o.d).toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+function reportAddedRow(S, a) {
+  const it = app.items.get(a.id); if (!it) return "";
+  const d = it.data, gone = it.deleted, dep = a.kind === "depense";
+  const titre = dep ? d.note || "Dépense" : d.libelle || "Revenu";
+  const cat = catMeta(S, dep ? depCat(S, d) : revenuCat(S, d));
+  const when = dep ? shortDate(d.date) : MOIS[(Number(d.mois) || 1) - 1];
+  const action = gone ? `<button type="button" class="btn line sm" data-rundo="${esc(a.id)}">Rétablir</button>`
+    : `<button type="button" class="iconbtn sm" data-rdel="${esc(a.id)}" aria-label="Supprimer ${esc(titre)}">${ICON.trash}</button>`;
+  return `<div class="row rrow${gone ? " gone" : ""}"><button type="button" class="rmain" ${gone ? "disabled" : `data-edit="${a.kind}" data-id="${esc(a.id)}"`}>${ico(cat, "sm")}<div class="main"><div class="t">${esc(titre)}</div><div class="s">${esc([when, cat.nom, a.manual ? "saisie manuelle" : "", gone ? "supprimée" : ""].filter(Boolean).join(" · "))}</div></div><div class="amt ${dep ? "" : "pos"}">${dep ? "" : "+"}${eur2(d.montant)}</div></button>${action}</div>`;
+}
+function reportDupRow(S, o, i) {
+  const mi = matchInfo(S, o.match);
+  return `<div class="row rrow dup"><div class="rmain"><div class="main"><div class="t">${esc(o.libelle)}</div><div class="s">${opDate(o)} · relevé</div>
+    ${mi.gone ? `<div class="rmatch">↳ ${esc(mi.titre)} · ${esc(mi.sub)}</div>` : `<button type="button" class="rmatch" data-edit="${o.match.kind}" data-id="${esc(o.match.id)}">↳ ${esc(mi.titre)} · ${esc(mi.sub)}</button>`}</div>
+    <div class="amt ${o.montant > 0 ? "pos" : ""}">${o.montant > 0 ? "+" : ""}${eur2(Math.abs(o.montant))}</div></div>
+    <button type="button" class="btn ghost sm" data-radd="${i}">Ajouter quand même</button></div>`;
+}
+function reportHTML(S) {
+  if (report.loading) return `<section class="card"><p class="empty">Lecture du relevé…</p></section>`;
+  const r = report, live = r.added.filter(a => { const it = app.items.get(a.id); return it && !it.deleted; });
+  const nDep = live.filter(a => a.kind === "depense").length, nRev = live.length - nDep;
+  return `<section class="card"><h2>Résumé<small>${plural(r.total, "opération")} lue${r.total > 1 ? "s" : ""}</small></h2>
+      <div class="kv"><span>Ajoutées</span><b>${plural(nDep, "dépense")}${nRev ? ` · ${plural(nRev, "revenu")}` : ""}</b></div>
+      <div class="kv"><span>Déjà saisies, non ajoutées</span><b>${r.dups.length}</b></div>
+      ${r.hors ? `<div class="kv"><span>Hors de l'année ${r.annee}, ignorées</span><b>${r.hors}</b></div>` : ""}
+      <p class="note">Touchez une ligne pour la modifier. Le PDF n'a été ni envoyé ni conservé : seules les lignes ajoutées sont enregistrées dans le budget.${r.hors ? ` Pour importer une autre année, changez l'année dans Réglages puis relancez l'import.` : ""}</p></section>
+    <section class="card"><h2>Lignes ajoutées<small>${live.length}</small></h2><div class="list">
+      ${r.added.length ? r.added.map(a => reportAddedRow(S, a)).join("") : `<p class="empty">Aucune ligne ajoutée.</p>`}</div>
+      <button type="button" class="btn line block" data-act="reportNew" style="margin-top:10px">${ICON.plus.replace("<svg", '<svg width="18" height="18"')}Ajouter une dépense</button></section>
+    <section class="card"><h2>Déjà saisies<small>${r.dups.length}</small></h2>
+      ${r.dups.length ? `<p class="note" style="margin-top:0">Ces opérations correspondent à une ligne du budget (même montant, date proche) : elles n'ont pas été ajoutées.</p><div class="list">${r.dups.map((o, i) => reportDupRow(S, o, i)).join("")}</div>` : `<p class="empty">Aucune opération n'était déjà saisie.</p>`}</section>`;
+}
+function showReport() {
+  $("#report").innerHTML = `<div class="spanel" role="dialog" aria-modal="true" aria-label="Import du relevé">
+    <div class="shead"><div class="col"><div class="srow"><h1 class="rtitle">Relevé importé</h1><button type="button" class="sclose" data-act="closeReport">Terminé</button></div></div></div>
+    <div class="sbody"><div class="col" id="rres"></div></div></div>`;
+  document.body.style.overflow = "hidden";
+  refreshReport();
+}
+function refreshReport() { const box = $("#rres"); if (report && box) box.innerHTML = reportHTML(state()); }
+function closeReport() { report = null; $("#report").innerHTML = ""; document.body.style.overflow = sheet || search ? "hidden" : ""; }
 
 /* ====================== Démarrage ====================== */
 async function boot() {
