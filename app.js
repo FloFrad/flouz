@@ -272,6 +272,28 @@ function chargePaid(S) {
   paidCache.set(S, P);
   return P;
 }
+/* Revenu ponctuel relié à un revenu régulier (r.lien) : c'est le versement réel du mois (salaire reçu…).
+ * Ce mois-là, il remplace le montant prévu du revenu régulier, au lieu de s'y ajouter. */
+const lienOf = (S, r) => (r.lien && r.frequence !== "Mensuel" && S.revenus.find(x => x.id === r.lien && x.frequence === "Mensuel")) || null;
+const recuCache = new WeakMap();
+// Versements reliés : « idRevenu:mois » → { montant, n }
+function revenuRecu(S) {
+  let P = recuCache.get(S);
+  if (P) return P;
+  P = new Map();
+  S.revenus.forEach(r => {
+    if (!lienOf(S, r)) return;
+    const k = `${r.lien}:${Number(r.mois) || 1}`, e = P.get(k) || { montant: 0, n: 0 };
+    e.montant += num(r.montant); e.n++; P.set(k, e);
+  });
+  recuCache.set(S, P);
+  return P;
+}
+// Montant d'un revenu pour un mois : régulier → le versement relié s'il y en a un, sinon le prévu ; ponctuel relié → 0 (compté avec son revenu régulier).
+function revenuMonth(S, r, m) {
+  if (r.frequence === "Mensuel") { const p = revenuRecu(S).get(`${r.id}:${m}`); return p ? p.montant : num(r.montant); }
+  return Number(r.mois) === m && !lienOf(S, r) ? num(r.montant) : 0;
+}
 // Où est rangée une dépense : sa charge, son enveloppe, ou « Relevé bancaire » (importée sans enveloppe).
 const depLieu = (S, d, envName) => { const c = chargeOf(S, d); return c ? "Charge · " + (c.libelle || "sans nom") : envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"); };
 // Montant d'une charge pour un mois : le paiement relié s'il y en a un, sinon le montant prévu.
@@ -295,8 +317,9 @@ function flows(S, ms) {
   });
   S.revenus.forEach(r => {
     const mensuel = r.frequence === "Mensuel";
-    const v = mensuel ? num(r.montant) * ms.length : (ms.includes(Number(r.mois)) ? num(r.montant) : 0);
-    if (v) inn.push({ k: "revenu", id: r.id, montant: v, cat: revenuCat(S, r), fixe: mensuel, titre: r.libelle || "Revenu", sub: `${personneNom(r.personne)} · ${mensuel ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]}` });
+    const v = ms.reduce((a, m) => a + revenuMonth(S, r, m), 0), nRecu = mensuel ? ms.filter(m => revenuRecu(S).has(`${r.id}:${m}`)).length : 0;
+    const recu = nRecu ? (ms.length > 1 ? ` · ${nRecu} reçu${nRecu > 1 ? "s" : ""}` : " · reçu") : "";
+    if (v) inn.push({ k: "revenu", id: r.id, montant: v, cat: revenuCat(S, r), fixe: mensuel, titre: r.libelle || "Revenu", sub: `${personneNom(r.personne)} · ${mensuel ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]}${recu}` });
   });
   (S.virements || []).forEach(v => (v.sens === "in" ? inn : out).push({ k: "virement", id: v.id, montant: v.montant * ms.length, cat: "_vir", fixe: true, titre: v.titre, sub: ms.length > 1 ? "Virement mensuel · 12 mois" : "Virement mensuel" }));
   return { out, inn };
@@ -306,7 +329,6 @@ function shortDate(d) { try { return new Date(d).toLocaleDateString("fr-FR", { d
 
 /* m = 0 → toute l'année */
 function reel(S, envId, m) { return S.depenses.filter(d => d.enveloppe === envId && Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m)).reduce((a, d) => a + num(d.montant), 0); }
-function revMonth(r, m) { return r.frequence === "Mensuel" ? num(r.montant) : (Number(r.mois) === m ? num(r.montant) : 0); }
 function calc(S, m) {
   if (m === 0) {
     const cs = Array.from({ length: 12 }, (_, i) => calc(S, i + 1));
@@ -315,8 +337,8 @@ function calc(S, m) {
       env: sum("env"), rav: sum("rav"), epargne: sum("epargne"), resteEnv: sum("resteEnv") };
   }
   const vir = sens => (S.virements || []).filter(v => v.sens === sens).reduce((a, v) => a + v.montant, 0); // vue d'un compte (forCompte)
-  const revenus = S.revenus.reduce((a, r) => a + revMonth(r, m), 0) + vir("in");
-  const revReg = S.revenus.filter(r => r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0) + vir("in");
+  const revenus = S.revenus.reduce((a, r) => a + revenuMonth(S, r, m), 0) + vir("in");
+  const revReg = S.revenus.filter(r => r.frequence === "Mensuel").reduce((a, r) => a + revenuMonth(S, r, m), 0) + vir("in"); // réguliers, versements reliés compris
   const charges = S.charges.reduce((a, c) => a + chargeMonth(S, c, m), 0) + vir("out");
   const provisions = S.provisions.reduce((a, p) => a + num(p.montant) / 12, 0);
   const envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
@@ -504,7 +526,7 @@ function vBudget(S) {
   const L = { revenu: S.revenus, charge: S.charges, provision: S.provisions, enveloppe: S.enveloppes }[seg] || [];
   const liv = Object.fromEntries(S.livrets.map(l => [l.id, l.nom]));
   const rowOf = {
-    revenu: r => [r.libelle, `${personneNom(r.personne)} · ${r.frequence === "Mensuel" ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]} · ${catMeta(S, revenuCat(S, r)).nom}`, eur(r.montant), r.frequence === "Mensuel" ? "/ mois" : "ponctuel"],
+    revenu: r => [r.libelle, `${personneNom(r.personne)} · ${r.frequence === "Mensuel" ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]} · ${lienOf(S, r) ? "versement de " + (lienOf(S, r).libelle || "revenu régulier") : catMeta(S, revenuCat(S, r)).nom}`, eur(r.montant), r.frequence === "Mensuel" ? "/ mois" : "ponctuel"],
     charge: c => [c.libelle, `${catMeta(S, chargeCat(S, c)).nom} · ${compteNom(c.compte)}`, eur(c.montant), "/ mois"],
     provision: p => [p.libelle, `${MOIS[(Number(p.mois) || 1) - 1]} · ${liv[p.livret] || "sans livret"}`, eur(num(p.montant) / 12), `/ mois · ${eur(p.montant)} an`],
     enveloppe: e => [e.libelle, `budget mensuel · ${catMeta(S, envCat(S, e)).nom}`, eur(e.prevu), "/ mois"]
@@ -748,7 +770,7 @@ function spark(vals, m) {
 function vLivrets(S) {
   const m = app.month, j = joint(S), c0 = calc(S, 1), mi = m || 12;
   const anyNeg = S.livrets.some(l => livretStats(S, l).bas < 0);
-  const regC = { rev: c0.revReg, ch: S.charges.reduce((a, c) => a + num(c.montant), 0), pr: c0.provisions, en: c0.envPrevu }; // montants prévus, sans les paiements reliés
+  const regC = { rev: S.revenus.filter(r => r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0), ch: S.charges.reduce((a, c) => a + num(c.montant), 0), pr: c0.provisions, en: c0.envPrevu }; // montants prévus, sans les paiements ni versements reliés
   const ep = regC.rev - regC.ch - regC.pr - regC.en;
   return `${head("Livrets")}
   ${monthsBar(S)}
@@ -852,7 +874,8 @@ const catOpts = (S, sens, none) => [["", none], ...S.categories.filter(c => c.se
 function fieldsFor(kind, S, d) {
   const months = MOIS.map((n, i) => [i + 1, n]);
   return {
-    revenu: [["libelle", "Libellé", "text"], ["montant", "Montant", "euro"], ["personne", "Personne", "select", [...S.personnes, ["Commun", "Compte joint"]]], ["categorie", "Catégorie", "select", catOpts(S, "revenu", "À catégoriser")], ["frequence", "Fréquence", "select", ["Mensuel", "Ponctuel"]], ...(d.frequence === "Ponctuel" ? [["mois", "Mois", "select", months]] : [])],
+    revenu: [["libelle", "Libellé", "text"], ["montant", "Montant", "euro"], ["personne", "Personne", "select", [...S.personnes, ["Commun", "Compte joint"]]], ["categorie", "Catégorie", "select", catOpts(S, "revenu", "À catégoriser")], ["frequence", "Fréquence", "select", ["Mensuel", "Ponctuel"]], ...(d.frequence === "Ponctuel" ? [["mois", "Mois", "select", months]] : []),
+      ...(d.frequence === "Ponctuel" && S.revenus.some(r => r.frequence === "Mensuel") ? [["lien", "Versement d'un revenu régulier", "select", [["", "Aucun (revenu ponctuel)"], ...S.revenus.filter(r => r.frequence === "Mensuel").map(r => [r.id, `${r.libelle || "Revenu"} · ${personneNom(r.personne)} · ${eur(r.montant)} / mois`])]]] : [])],
     charge: [["libelle", "Libellé", "text"], ["montant", "Montant / mois", "euro"], ["categorie", "Catégorie", "select", catOpts(S, "depense", "À catégoriser")], ["compte", "Compte", "select", comptesOf(S).map(c => [c, compteNom(c)])]],
     provision: [["libelle", "Libellé", "text"], ["montant", "Montant annuel", "euro"], ["mois", "Mois de la dépense", "select", months], ["livret", "Livret", "select", [["", "—"], ...S.livrets.map(l => [l.id, l.nom])]]],
     enveloppe: [["libelle", "Nom de l'enveloppe", "text"], ["prevu", "Budget / mois", "euro"], ["categorie", "Catégorie des saisies", "select", catOpts(S, "depense", "Automatique (d'après le nom)")]],
@@ -916,6 +939,8 @@ function renderSheet(first) {
     }).join("");
     if (k === "provision" && num(d.montant)) body += `<p class="note">À mettre de côté : <b>${eur(num(d.montant) / 12)}</b> par mois.</p>`;
     if (k === "charge" && sheet.id) body += chargePayments(S, sheet.id);
+    if (k === "revenu") { const l = lienOf(S, d); if (l) body += `<p class="note">Versement de « ${esc(l.libelle || "Revenu")} » : en ${MOIS[(Number(d.mois) || 1) - 1].toLowerCase()}, il remplace les ${eur(l.montant)} prévus (rien n'est compté deux fois).</p>`; }
+    if (k === "revenu" && sheet.id && d.frequence === "Mensuel") body += revenuVersements(S, sheet.id);
   }
   const delZone = sheet.id ? (sheet.confirmDel
     ? `<div class="btnrow"><button type="button" class="btn danger" data-act="delConfirm">Supprimer définitivement</button><button type="button" class="btn line" data-act="delCancel">Annuler</button></div>`
@@ -937,6 +962,23 @@ function chargePayments(S, id) {
   return `<div class="field"><span>Paiements reliés · ${S.annee}</span><div class="list">${deps.map(x => `<button type="button" class="row" data-edit="depense" data-id="${esc(x.id)}"><div class="main"><div class="t">${MOIS[(Number(x.mois) || 1) - 1]}</div><div class="s">${esc([x.note, shortDate(x.date), depCompte(S, x) ? compteCourt(depCompte(S, x)) : ""].filter(Boolean).join(" · "))}</div></div><div class="amt">${eur2(x.montant)}</div>${ICON.chev}</button>`).join("") || `<p class="empty">Aucun paiement relié.</p>`}</div></div>
     <button type="button" class="btn line block" data-act="payCharge" data-id="${esc(id)}">Saisir le paiement de ${MOIS[m - 1].toLowerCase()}</button>
     <p class="note">Un paiement relié (une dépense, saisie ou importée du relevé) remplace le montant prévu ce mois-là. Pour relier une dépense existante : ouvrez-la, puis choisissez la charge.</p>`;
+}
+// Fiche d'un revenu régulier : ses versements reliés (chacun remplace le montant prévu de son mois).
+function revenuVersements(S, id) {
+  const L = S.revenus.filter(r => r.lien === id && lienOf(S, r)).sort((a, b) => Number(b.mois) - Number(a.mois));
+  const m = app.month || new Date().getMonth() + 1;
+  return `<div class="field"><span>Versements reliés · ${S.annee}</span><div class="list">${L.map(r => `<button type="button" class="row" data-edit="revenu" data-id="${esc(r.id)}"><div class="main"><div class="t">${MOIS[(Number(r.mois) || 1) - 1]}</div><div class="s">${esc([r.libelle, personneNom(r.personne)].filter(Boolean).join(" · "))}</div></div><div class="amt">${eur2(r.montant)}</div>${ICON.chev}</button>`).join("") || `<p class="empty">Aucun versement relié.</p>`}</div></div>
+    <button type="button" class="btn line block" data-act="recuRevenu" data-id="${esc(id)}">Saisir le versement de ${MOIS[m - 1].toLowerCase()}</button>
+    <p class="note">Un versement relié (un revenu ponctuel, saisi ou importé du relevé) remplace le montant prévu ce mois-là. Pour relier un revenu existant : ouvrez-le, puis choisissez le revenu régulier.</p>`;
+}
+// Relier un revenu ponctuel à un revenu régulier : catégorie, personne et libellé de celui-ci par défaut.
+function pickLien() {
+  const S = state(), d = sheet.draft, l = lienOf(S, d);
+  if (!l) { d.lien = ""; return; }
+  if (!d._ct) d.categorie = revenuCat(S, l);
+  if (!String(d.libelle || "").trim()) d.libelle = l.libelle || "";
+  if (!sheet.id && !num(d.montant)) d.montant = num(l.montant);
+  if (!d.ref) d.personne = l.personne; // une ligne de relevé garde la personne du relevé
 }
 // Relier (ou délier) la dépense en cours à une charge : plus d'enveloppe ; catégorie, note et compte de la charge par défaut.
 function pickCharge() {
@@ -978,6 +1020,7 @@ function saveSheet() {
     const nameF = kind === "livret" || kind === "categorie" ? "nom" : "libelle";
     if (!String(d[nameF] || "").trim()) return err("Donnez-lui un nom.");
     if (kind === "categorie") { d.nom = d.nom.trim(); d.icone = String(d.icone || "").trim() || "🏷️"; }
+    if (kind === "revenu" && !lienOf(state(), d)) delete d.lien;
   }
   if (!id) d.ordre = Date.now();
   const nid = id || newId(), prev = id && app.items.get(id);
@@ -1083,7 +1126,8 @@ function searchEntries(S) {
   S.revenus.forEach(r => {
     const montant = num(r.montant); if (!montant) return;
     const mensuel = r.frequence === "Mensuel", m = Number(r.mois) || 1;
-    add({ k: "revenu", id: r.id, montant, cat: revenuCat(S, r), y: mensuel ? 0 : Number(S.annee), m: mensuel ? 0 : m, day: 0, titre: r.libelle || "Revenu", ctx: [personneNom(r.personne), mensuel ? "chaque mois" : `${MOIS[m - 1]} ${S.annee}`] }, [r.personne, personneNom(r.personne), mensuel ? "mensuel regulier" : "ponctuel"]);
+    const lien = lienOf(S, r), vers = lien ? "Versement · " + (lien.libelle || "revenu régulier") : "";
+    add({ k: "revenu", id: r.id, montant, cat: revenuCat(S, r), y: mensuel ? 0 : Number(S.annee), m: mensuel ? 0 : m, day: 0, titre: r.libelle || "Revenu", ctx: [personneNom(r.personne), mensuel ? "chaque mois" : `${MOIS[m - 1]} ${S.annee}`, vers].filter(Boolean) }, [r.personne, personneNom(r.personne), mensuel ? "mensuel regulier" : "ponctuel", vers]);
   });
   S.charges.forEach(c => {
     const montant = num(c.montant); if (!montant) return;
@@ -1177,6 +1221,10 @@ document.addEventListener("click", async e => {
     case "closeSearch": closeSearch(); break;
     case "closeReport": closeReport(); break;
     case "reportNew": openSheet("depense"); sheet.fromReport = true; break;
+    case "recuRevenu": { // depuis la fiche d'un revenu régulier : nouveau revenu ponctuel relié, au montant prévu
+      const S = state(), r = S.revenus.find(x => x.id === t.dataset.id); if (!r) break;
+      openSheet("revenu", null, { frequence: "Ponctuel", lien: r.id, montant: num(r.montant), libelle: r.libelle || "", personne: r.personne, categorie: revenuCat(S, r) }); break;
+    }
     case "payCharge": { // depuis la fiche d'une charge : nouvelle dépense reliée, au montant prévu
       const S = state(), c = S.charges.find(x => x.id === t.dataset.id); if (!c) break;
       openSheet("depense", null, { charge: c.id, enveloppe: "", montant: num(c.montant), note: c.libelle || "", compte: c.compte, categorie: chargeCat(S, c) }); break;
@@ -1196,6 +1244,7 @@ document.addEventListener("click", async e => {
     case "delCancel": sheet.confirmDel = false; renderSheet(); break;
     case "delConfirm": {
       const { kind, id } = sheet; del(kind, id);
+      if (kind === "revenu") state().revenus.filter(x => x.lien === id).forEach(x => { const { lien, ...rest } = app.items.get(x.id).data; put("revenu", x.id, rest); }); // ses versements redeviennent des revenus ponctuels
       if (kind === "charge") state().depenses.filter(x => x.charge === id).forEach(x => { const { charge, ...rest } = app.items.get(x.id).data; put("depense", x.id, rest); }); // ses paiements redeviennent des dépenses
       if (kind === "livret") state().provisions.filter(p => p.livret === id).forEach(p => { const it = app.items.get(p.id); put("provision", p.id, { ...it.data, livret: "" }); });
       closeSheet(); toast("Supprimé"); break;
@@ -1227,6 +1276,7 @@ document.addEventListener("input", e => {
     sheet.draft[el.dataset.f] = el.value;
     if (el.dataset.f === "categorie") sheet.draft._ct = true;
     if (el.dataset.f === "charge" && sheet.kind === "depense") pickCharge();
+    if (el.dataset.f === "lien" && sheet.kind === "revenu") pickLien();
     if (el.dataset.f === (sheet.kind === "depense" ? "note" : "libelle")) suggestCat();
     if (el.tagName === "SELECT" || (sheet.kind === "provision" && el.dataset.f === "montant")) {
       if (el.tagName === "SELECT") renderSheet();
@@ -1393,7 +1443,7 @@ function importState(src, opt = {}) {
   const idMap = {};
   const nid = old => (idMap[old] = idMap[old] || newId());
   (src.livrets || []).forEach(l => put("livret", nid(l.id), { nom: l.nom, solde: num(l.solde), ordre: o++ }));
-  (src.revenus || []).forEach(r => put("revenu", nid(r.id), { libelle: r.libelle, personne: fix(r.personne), type: r.type, ...(r.categorie != null ? { categorie: r.categorie } : {}), frequence: r.frequence === "Mensuel" ? "Mensuel" : "Ponctuel", mois: Number(r.mois) || 1, montant: num(r.montant), ordre: o++ }));
+  (src.revenus || []).forEach(r => put("revenu", nid(r.id), { libelle: r.libelle, personne: fix(r.personne), type: r.type, ...(r.categorie != null ? { categorie: r.categorie } : {}), frequence: r.frequence === "Mensuel" ? "Mensuel" : "Ponctuel", ...(r.lien ? { lien: nid(r.lien) } : {}), mois: Number(r.mois) || 1, montant: num(r.montant), ordre: o++ }));
   (src.charges || []).forEach(c => put("charge", nid(c.id), { libelle: c.libelle, categorie: c.categorie || "Autre", compte: fixC(c.compte), montant: num(c.montant), ordre: o++ }));
   (src.provisions || []).forEach(p => put("provision", nid(p.id), { libelle: p.libelle, livret: p.livret ? nid(p.livret) : "", montant: num(p.montant), mois: Number(p.mois) || 1, ordre: o++ }));
   (src.enveloppes || []).forEach(e => put("enveloppe", nid(e.id), { libelle: e.libelle, prevu: num(e.prevu), ...(e.categorie ? { categorie: e.categorie } : {}), ordre: o++ }));
@@ -1682,11 +1732,12 @@ function findDuplicates(S, ops, compte) {
   });
 }
 // charge : charge mensuelle dont l'opération est le paiement (dépense reliée, sans enveloppe)
+// (ou revenu régulier dont l'opération est le versement : revenu ponctuel relié)
 function addOp(S, o, compte, charge) {
-  const id = newId(), dep = o.montant < 0, categorie = autoCat(S, o.libelle, "revenu"), auto = categorie ? { catAuto: true } : {};
+  const id = newId(), dep = o.montant < 0, lien = !dep && charge, categorie = lien ? revenuCat(S, lien) : autoCat(S, o.libelle, "revenu"), auto = categorie && !lien ? { catAuto: true } : {};
   const link = charge ? { categorie: chargeCat(S, charge), enveloppe: "", charge: charge.id } : {};
   if (dep) put("depense", id, { ...autoDep(S, o.libelle), ...link, annee: o.y, mois: o.m, montant: -o.montant, note: o.libelle, par: comptePar(compte), compte, date: o.date + "T12:00:00.000Z", ref: o.ref });
-  else put("revenu", id, { libelle: o.libelle, personne: comptePersonne(compte), type: "Autre", categorie, ...auto, frequence: "Ponctuel", mois: o.m, montant: o.montant, ordre: Date.now(), ref: o.ref });
+  else put("revenu", id, { libelle: o.libelle, personne: comptePersonne(compte), type: "Autre", categorie, ...auto, frequence: "Ponctuel", ...(lien ? { lien: lien.id } : {}), mois: o.m, montant: o.montant, ordre: Date.now(), ref: o.ref });
   return { id, kind: o.montant < 0 ? "depense" : "revenu" };
 }
 function applyStatement(ops, compte) {
@@ -1734,10 +1785,11 @@ async function importPdf(file) {
 }
 function reportAddAnyway(i) {
   const o = report && report.dups[i]; if (!o) return;
-  const S = state(), ch = o.match.how !== "ref" && o.match.kind === "charge" ? S.charges.find(c => c.id === o.match.id) : null;
+  const S = state(), ch = o.match.how !== "ref" && o.match.kind === "charge" ? S.charges.find(c => c.id === o.match.id)
+    : o.match.how !== "ref" && o.match.kind === "revenu" ? S.revenus.find(r => r.id === o.match.id && r.frequence === "Mensuel") : null;
   report.dups.splice(i, 1);
   report.added.push(addOp(S, { ...o, ref: o.match.how === "ref" ? `${o.ref}+${newId().slice(0, 4)}` : o.ref }, report.compte, ch));
-  toast(ch ? `Ligne ajoutée, reliée à « ${ch.libelle || "la charge"} »` : "Ligne ajoutée");
+  toast(ch ? `Ligne ajoutée, reliée à « ${ch.libelle || (o.montant < 0 ? "la charge" : "le revenu")} »` : "Ligne ajoutée");
 }
 // Ligne existante à laquelle une opération correspond.
 function matchInfo(S, m) {
@@ -1757,7 +1809,8 @@ function reportAddedRow(S, a) {
   const d = it.data, gone = it.deleted, dep = a.kind === "depense";
   const titre = dep ? d.note || "Dépense" : d.libelle || "Revenu";
   const cat = catMeta(S, dep ? depCat(S, d) : revenuCat(S, d));
-  const when = dep ? shortDate(d.date) : MOIS[(Number(d.mois) || 1) - 1], ch = dep && chargeOf(S, d), env = dep && (ch ? { libelle: "Charge · " + (ch.libelle || "sans nom") } : S.enveloppes.find(e => e.id === d.enveloppe));
+  const when = dep ? shortDate(d.date) : MOIS[(Number(d.mois) || 1) - 1], ch = dep && chargeOf(S, d), l = !dep && lienOf(S, d);
+  const env = l ? { libelle: "Versement · " + (l.libelle || "revenu régulier") } : dep && (ch ? { libelle: "Charge · " + (ch.libelle || "sans nom") } : S.enveloppes.find(e => e.id === d.enveloppe));
   const action = gone ? `<button type="button" class="btn line sm" data-rundo="${esc(a.id)}">Rétablir</button>`
     : `<button type="button" class="iconbtn sm" data-rdel="${esc(a.id)}" aria-label="Supprimer ${esc(titre)}">${ICON.trash}</button>`;
   return `<div class="row rrow${gone ? " gone" : ""}"><button type="button" class="rmain" ${gone ? "disabled" : `data-edit="${a.kind}" data-id="${esc(a.id)}"`}>${ico(cat, "sm")}<div class="main"><div class="t">${esc(titre)}</div><div class="s">${esc([when, cat.nom, env && env.libelle, dep && depCompte(S, d) ? compteCourt(depCompte(S, d)) : "", a.manual ? "saisie manuelle" : "", gone ? "supprimée" : ""].filter(Boolean).join(" · "))}</div></div><div class="amt ${dep ? "" : "pos"}">${dep ? "" : "+"}${eur2(d.montant)}</div></button>${action}</div>`;
@@ -1767,7 +1820,7 @@ function reportDupRow(S, o, i) {
   return `<div class="row rrow dup"><div class="rmain"><div class="main"><div class="t">${esc(o.libelle)}</div><div class="s">${opDate(o)} · relevé</div>
     ${mi.gone ? `<div class="rmatch">↳ ${esc(mi.titre)} · ${esc(mi.sub)}</div>` : `<button type="button" class="rmatch" data-edit="${o.match.kind}" data-id="${esc(o.match.id)}">↳ ${esc(mi.titre)} · ${esc(mi.sub)}</button>`}</div>
     <div class="amt ${o.montant > 0 ? "pos" : ""}">${o.montant > 0 ? "+" : ""}${eur2(Math.abs(o.montant))}</div></div>
-    <button type="button" class="btn ghost sm" data-radd="${i}">${o.match.how !== "ref" && o.match.kind === "charge" && !mi.gone ? "Relier à la charge" : "Ajouter quand même"}</button></div>`;
+    <button type="button" class="btn ghost sm" data-radd="${i}">${o.match.how !== "ref" && o.match.kind === "charge" && !mi.gone ? "Relier à la charge" : o.match.how !== "ref" && o.match.kind === "revenu" && !mi.gone && app.items.get(o.match.id).data.frequence === "Mensuel" ? "Relier au revenu" : "Ajouter quand même"}</button></div>`;
 }
 function reportHTML(S) {
   if (report.loading) return `<section class="card"><p class="empty">Lecture du relevé…</p></section>`;
