@@ -471,6 +471,7 @@ function vCategories(S) {
   ${block("depense", "Catégories de dépenses", "Ajouter une catégorie de dépense")}
   ${block("revenu", "Catégories de revenus", "Ajouter une catégorie de revenu")}`;
 }
+// Budget : toujours tout le foyer (revenus, charges, enveloppes… de tous les comptes), sans le filtre par compte.
 function vBudget(S) {
   const seg = app.seg;
   if (seg === "categorie") return vCategories(S);
