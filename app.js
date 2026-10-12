@@ -406,7 +406,7 @@ function vHome(S0) {
   // Reste des enveloppes : comme dans Dépenses, budget commun face aux saisies du compte filtré
   const envPrevu = S0.enveloppes.reduce((a, e) => a + num(e.prevu), 0) * (m ? 1 : 12), resteEnv = envPrevu - c.envReel;
   return `${head(`${nm} <span class="yr">${S.annee}</span>`, SEARCH_BTN + GEAR_BTN)}
-  ${monthsBar(S0)}
+  ${monthsBar(S)}
   ${compteFilter(S0, fc)}
   ${exampleBanner(S0)}
   <section class="card hero"><div class="label">Épargne possible${fc === "all" ? "" : " · " + esc(fc === "Joint" ? "compte joint" : fc.slice(6))}</div><div class="big">${eur(c.epargne)}</div><div class="sub">${c.revenus > 0 ? Math.round(c.epargne / c.revenus * 100) : 0} % des revenus ${per}${c.revenus > c.revReg ? " · prime incluse" : ""}</div></section>
@@ -1090,7 +1090,11 @@ document.addEventListener("click", async e => {
   if (t.dataset.new) { openSheet(t.dataset.new, null, t.dataset.sens ? { sens: t.dataset.sens } : {}); return; }
   const a = t.dataset.act;
   switch (a) {
-    case "quick": openSheet("depense", null, { ...(t.dataset.env ? { enveloppe: t.dataset.env } : {}), ...(t.dataset.pcompte ? { compte: t.dataset.pcompte } : {}) }); break; // filtre actif : la saisie part sur ce compte
+    case "quick": { // filtre actif (Accueil, Dépenses, Analyse) : la saisie part sur ce compte
+      const fc = ["home", "env", "analyse"].includes(app.tab) && app.screen === "app" ? filtreCompte(state()) : "all";
+      const compte = t.dataset.pcompte || (fc !== "all" ? fc : "");
+      openSheet("depense", null, { ...(t.dataset.env ? { enveloppe: t.dataset.env } : {}), ...(compte ? { compte } : {}) }); break;
+    }
     case "closeSheet": closeSheet(); break;
     case "openSearch": openSearch(); break;
     case "closeSearch": closeSearch(); break;
