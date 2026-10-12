@@ -100,7 +100,7 @@ Les 17 catégories de départ (12 de dépenses, 5 de revenus) sont créées au p
 - chaque opération porte une `ref` : réimporter le même fichier n'ajoute aucun doublon ;
 - les catégories sont celles proposées dans le fichier ; ce qui n'a pas pu être deviné reste dans « À catégoriser » (Analyse), à ranger d'un toucher ;
 - seules les opérations de l'année du budget sont importées.
-- `personne` et `par` (facultatifs, au niveau du fichier) fixent à qui sont attribués les revenus et les dépenses (ex. `"personne": "Commun", "par": "Compte commun"` pour le compte joint) ; sinon, c'est la personne qui importe.
+- `personne` et `par` (facultatifs, au niveau du fichier) fixent à qui sont attribués les revenus et les dépenses (ex. `"personne": "Compte joint", "par": "Compte joint"` pour le compte joint ; « Commun » et « Compte commun » sont acceptés et désignent le même compte joint) ; sinon, c'est la personne qui importe.
 
 Format : `{"format":"releve-bancaire","operations":[{"ref":"…","date":"2026-09-08","libelle":"…","montant":-12.0,"categorie":"c-alim"}]}` (montant négatif = débit ; ids de catégories : `c-alim`, `c-auto`, `r-salaire`…).
 
@@ -110,7 +110,7 @@ Format : `{"format":"releve-bancaire","operations":[{"ref":"…","date":"2026-09
 
 - L'app lit le tableau dont l'en-tête comporte les colonnes **DATE, LIBELLE, VALEUR, DEBIT, CREDIT** (sur une ou plusieurs pages). Les libellés sur plusieurs lignes sont recollés ; les lignes de solde et de total sont ignorées.
 - Un débit devient une **dépense** (catégorie et enveloppe devinées d'après le libellé : voir *Catégories automatiques*), un crédit un **revenu ponctuel** du mois. Seules les opérations de l'année du budget sont importées.
-- Après la lecture, l'app demande **sur quel compte** ajouter le relevé : **compte joint** ou **compte perso** de l'un ou l'autre (le dernier choix est proposé en premier). Les dépenses sont rattachées à ce compte (« par » = Compte joint ou le prénom) et les revenus à la personne (« Commun » pour le compte joint). Seules les charges mensuelles de ce compte servent à repérer ce qui est déjà saisi. Le compte se change ensuite dans le rapport (toutes les lignes ajoutées suivent) ou ligne par ligne dans la fiche d'une dépense.
+- Après la lecture, l'app demande **sur quel compte** ajouter le relevé : **compte joint** ou **compte perso** de l'un ou l'autre (le dernier choix est proposé en premier). Les dépenses sont rattachées à ce compte (« par » = Compte joint ou le prénom) et les revenus à la personne (ou au compte joint). Seules les charges mensuelles de ce compte servent à repérer ce qui est déjà saisi. Le compte se change ensuite dans le rapport (toutes les lignes ajoutées suivent) ou ligne par ligne dans la fiche d'une dépense.
 - **Ce qui est déjà saisi n'est pas ajouté** : une dépense du même montant saisie à quelques jours près (ou dans le même mois), une charge mensuelle ou une dépense annuelle du même montant, un revenu du même montant, ou une opération d'un relevé déjà importé.
 - À la fin, une page **Relevé importé** liste les lignes ajoutées et celles repérées comme déjà saisies (avec la ligne du budget correspondante). On peut y **modifier** une ligne (toucher), la **supprimer** (corbeille, puis *Rétablir* si besoin), **ajouter quand même** une ligne repérée, ou **ajouter une dépense** à la main.
 

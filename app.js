@@ -229,7 +229,10 @@ function state() {
     st && !st.deleted ? st.data : {});
   if (!Array.isArray(s.personnes) || s.personnes.length < 2) s.personnes = ["Personne 1", "Personne 2"];
   const categories = by("categorie");
-  return { ...s, livrets: by("livret"), revenus: by("revenu"), charges: by("charge"), provisions: by("provision"), enveloppes: by("enveloppe"),
+  // « Commun », « Compte commun »… : un seul compte joint (revenus « Commun », charges « Joint »)
+  const revenus = by("revenu").map(r => (estJoint(r.personne) ? { ...r, personne: "Commun" } : r));
+  const charges = by("charge").map(c => (!c.compte || estJoint(c.compte) ? { ...c, compte: "Joint" } : c));
+  return { ...s, livrets: by("livret"), revenus, charges, provisions: by("provision"), enveloppes: by("enveloppe"),
     categories, catById: Object.fromEntries(categories.map(c => [c.id, c])),
     depenses: by("depense").sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))) };
 }
@@ -270,7 +273,7 @@ function flows(S, ms) {
   S.revenus.forEach(r => {
     const mensuel = r.frequence === "Mensuel";
     const v = mensuel ? num(r.montant) * ms.length : (ms.includes(Number(r.mois)) ? num(r.montant) : 0);
-    if (v) inn.push({ k: "revenu", id: r.id, montant: v, cat: revenuCat(S, r), fixe: mensuel, titre: r.libelle || "Revenu", sub: `${r.personne || ""} · ${mensuel ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]}` });
+    if (v) inn.push({ k: "revenu", id: r.id, montant: v, cat: revenuCat(S, r), fixe: mensuel, titre: r.libelle || "Revenu", sub: `${personneNom(r.personne)} · ${mensuel ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]}` });
   });
   (S.virements || []).forEach(v => (v.sens === "in" ? inn : out).push({ k: "virement", id: v.id, montant: v.montant * ms.length, cat: "_vir", fixe: true, titre: v.titre, sub: ms.length > 1 ? "Virement mensuel · 12 mois" : "Virement mensuel" }));
   return { out, inn };
@@ -478,8 +481,8 @@ function vBudget(S) {
   const L = { revenu: S.revenus, charge: S.charges, provision: S.provisions, enveloppe: S.enveloppes }[seg] || [];
   const liv = Object.fromEntries(S.livrets.map(l => [l.id, l.nom]));
   const rowOf = {
-    revenu: r => [r.libelle, `${r.personne || ""} · ${r.frequence === "Mensuel" ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]} · ${catMeta(S, revenuCat(S, r)).nom}`, eur(r.montant), r.frequence === "Mensuel" ? "/ mois" : "ponctuel"],
-    charge: c => [c.libelle, `${catMeta(S, chargeCat(S, c)).nom} · ${c.compte || ""}`, eur(c.montant), "/ mois"],
+    revenu: r => [r.libelle, `${personneNom(r.personne)} · ${r.frequence === "Mensuel" ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]} · ${catMeta(S, revenuCat(S, r)).nom}`, eur(r.montant), r.frequence === "Mensuel" ? "/ mois" : "ponctuel"],
+    charge: c => [c.libelle, `${catMeta(S, chargeCat(S, c)).nom} · ${compteNom(c.compte)}`, eur(c.montant), "/ mois"],
     provision: p => [p.libelle, `${MOIS[(Number(p.mois) || 1) - 1]} · ${liv[p.livret] || "sans livret"}`, eur(num(p.montant) / 12), `/ mois · ${eur(p.montant)} an`],
     enveloppe: e => [e.libelle, `budget mensuel · ${catMeta(S, envCat(S, e)).nom}`, eur(e.prevu), "/ mois"]
   }[seg];
@@ -696,8 +699,8 @@ function autoSortNote(S, sens, ms, open) {
 }
 function vRec(S, per) {
   const n = per.ms.length, sfx = per.all ? "sur l'année" : "par mois";
-  const rev = S.revenus.filter(r => r.frequence === "Mensuel").map(r => ({ k: "revenu", id: r.id, titre: r.libelle, montant: num(r.montant) * n, meta: catMeta(S, revenuCat(S, r)), sub: r.personne || "" }));
-  const ch = S.charges.map(c => ({ k: "charge", id: c.id, titre: c.libelle, montant: num(c.montant) * n, meta: catMeta(S, chargeCat(S, c)), sub: c.compte || "" }));
+  const rev = S.revenus.filter(r => r.frequence === "Mensuel").map(r => ({ k: "revenu", id: r.id, titre: r.libelle, montant: num(r.montant) * n, meta: catMeta(S, revenuCat(S, r)), sub: personneNom(r.personne) }));
+  const ch = S.charges.map(c => ({ k: "charge", id: c.id, titre: c.libelle, montant: num(c.montant) * n, meta: catMeta(S, chargeCat(S, c)), sub: compteNom(c.compte) }));
   const pr = S.provisions.map(p => ({ k: "provision", id: p.id, titre: p.libelle, montant: num(p.montant) / 12 * n, meta: { icone: "🐷", couleur: "#C28316" }, sub: `${MOIS[(Number(p.mois) || 1) - 1]} · ${eur(p.montant)} / an` }));
   (S.virements || []).forEach(v => (v.sens === "in" ? rev : ch).push({ k: "virement", id: v.id, titre: v.titre, montant: v.montant * n, meta: catMeta(S, "_vir"), sub: "virement mensuel" }));
   const T = L => sumOf(L);
@@ -735,7 +738,7 @@ function vLivrets(S) {
   <section class="card"><h2>Compte joint<small>${S.repartition === "egal" ? "50 / 50" : "au prorata des salaires"}</small></h2>
     ${j.pers.map(p => `<div class="kv"><span>${esc(p.nom)} vire <span class="muted">(${Math.round(p.part * 100)} %)</span></span><b>${eur(p.vir)}</b></div>`).join("")}
     <div class="kv total"><span>À couvrir chaque mois</span><b>${eur(j.besoin)}</b></div>
-    <p class="note">${eur(j.ch)} de charges · ${eur(j.prov)} de provisions · ${eur(j.env)} d'enveloppes${j.ep ? ` · ${eur(j.ep)} d'épargne commune` : ""}${j.commun ? ` − ${eur(j.commun)} de revenus communs` : ""}.</p>
+    <p class="note">${eur(j.ch)} de charges · ${eur(j.prov)} de provisions · ${eur(j.env)} d'enveloppes${j.ep ? ` · ${eur(j.ep)} d'épargne commune` : ""}${j.commun ? ` − ${eur(j.commun)} de revenus du compte joint` : ""}.</p>
     ${j.pers.map(p => `<div class="kv"><span>Reste perso ${esc(p.nom)}</span><b class="${p.reste < 0 ? "neg" : ""}">${eur(p.reste)}</b></div>`).join("")}
   </section>
   <section class="card"><h2>Mois type<small>hors primes</small></h2>
@@ -826,8 +829,8 @@ const catOpts = (S, sens, none) => [["", none], ...S.categories.filter(c => c.se
 function fieldsFor(kind, S, d) {
   const months = MOIS.map((n, i) => [i + 1, n]);
   return {
-    revenu: [["libelle", "Libellé", "text"], ["montant", "Montant", "euro"], ["personne", "Personne", "select", [...S.personnes, "Commun"]], ["categorie", "Catégorie", "select", catOpts(S, "revenu", "À catégoriser")], ["frequence", "Fréquence", "select", ["Mensuel", "Ponctuel"]], ...(d.frequence === "Ponctuel" ? [["mois", "Mois", "select", months]] : [])],
-    charge: [["libelle", "Libellé", "text"], ["montant", "Montant / mois", "euro"], ["categorie", "Catégorie", "select", catOpts(S, "depense", "À catégoriser")], ["compte", "Compte", "select", ["Joint", ...S.personnes.map(p => "Perso " + p)]]],
+    revenu: [["libelle", "Libellé", "text"], ["montant", "Montant", "euro"], ["personne", "Personne", "select", [...S.personnes, ["Commun", "Compte joint"]]], ["categorie", "Catégorie", "select", catOpts(S, "revenu", "À catégoriser")], ["frequence", "Fréquence", "select", ["Mensuel", "Ponctuel"]], ...(d.frequence === "Ponctuel" ? [["mois", "Mois", "select", months]] : [])],
+    charge: [["libelle", "Libellé", "text"], ["montant", "Montant / mois", "euro"], ["categorie", "Catégorie", "select", catOpts(S, "depense", "À catégoriser")], ["compte", "Compte", "select", comptesOf(S).map(c => [c, compteNom(c)])]],
     provision: [["libelle", "Libellé", "text"], ["montant", "Montant annuel", "euro"], ["mois", "Mois de la dépense", "select", months], ["livret", "Livret", "select", [["", "—"], ...S.livrets.map(l => [l.id, l.nom])]]],
     enveloppe: [["libelle", "Nom de l'enveloppe", "text"], ["prevu", "Budget / mois", "euro"], ["categorie", "Catégorie des saisies", "select", catOpts(S, "depense", "Automatique (d'après le nom)")]],
     livret: [["nom", "Nom du livret", "text"], ["solde", `Solde au 1er janvier ${S.annee}`, "euro"]]
@@ -850,6 +853,8 @@ function openSheet(kind, id, preset = {}) {
   // les anciennes lignes (libellés texte) sont converties pour que la liste déroulante affiche la bonne catégorie
   if (kind === "revenu") draft.categorie = revenuCat(S, it ? it.data : draft);
   if (kind === "charge") draft.categorie = chargeCat(S, draft);
+  if (kind === "revenu" && estJoint(draft.personne)) draft.personne = "Commun";
+  if (kind === "charge" && (!draft.compte || estJoint(draft.compte))) draft.compte = "Joint";
   if (kind === "enveloppe") draft.categorie = resolveCat(S, draft.categorie, "depense");
   if (kind === "depense") draft.categorie = it ? depCat(S, it.data) : (preset.categorie ?? envCat(S, S.enveloppes.find(e => e.id === draft.enveloppe)));
   if (kind === "depense" && !comptesOf(S).includes(draft.compte)) draft.compte = it ? compteFromPar(S, draft.par) : defaultCompte(S);
@@ -1032,11 +1037,11 @@ function searchEntries(S) {
   S.revenus.forEach(r => {
     const montant = num(r.montant); if (!montant) return;
     const mensuel = r.frequence === "Mensuel", m = Number(r.mois) || 1;
-    add({ k: "revenu", id: r.id, montant, cat: revenuCat(S, r), y: mensuel ? 0 : Number(S.annee), m: mensuel ? 0 : m, day: 0, titre: r.libelle || "Revenu", ctx: [r.personne, mensuel ? "chaque mois" : `${MOIS[m - 1]} ${S.annee}`] }, [r.personne, mensuel ? "mensuel regulier" : "ponctuel"]);
+    add({ k: "revenu", id: r.id, montant, cat: revenuCat(S, r), y: mensuel ? 0 : Number(S.annee), m: mensuel ? 0 : m, day: 0, titre: r.libelle || "Revenu", ctx: [personneNom(r.personne), mensuel ? "chaque mois" : `${MOIS[m - 1]} ${S.annee}`] }, [r.personne, personneNom(r.personne), mensuel ? "mensuel regulier" : "ponctuel"]);
   });
   S.charges.forEach(c => {
     const montant = num(c.montant); if (!montant) return;
-    add({ k: "charge", id: c.id, montant, cat: chargeCat(S, c), y: 0, m: 0, day: 0, titre: c.libelle || "Charge", ctx: ["Charge mensuelle", c.compte] }, [c.compte, "mensuelle"]);
+    add({ k: "charge", id: c.id, montant, cat: chargeCat(S, c), y: 0, m: 0, day: 0, titre: c.libelle || "Charge", ctx: ["Charge mensuelle", compteNom(c.compte)] }, [c.compte, compteNom(c.compte), "mensuelle"]);
   });
   return list;
 }
@@ -1368,8 +1373,8 @@ async function doExport() {
 // Relevé bancaire : AJOUTE les opérations (débit → dépense, crédit → revenu ponctuel) sans toucher au reste.
 // Chaque opération porte une « ref » : un second import du même fichier n'ajoute rien (même une ligne supprimée ne revient pas).
 function importReleve(src) {
-  const S = state(), me = src.personne || (S.personnes.includes(app.myName) ? app.myName : S.personnes[0]); // « personne » : par ex. « Commun » pour le compte joint
-  const par = src.par != null ? src.par : app.myName || "";
+  const S = state(), me = estJoint(src.personne) ? "Commun" : src.personne || (S.personnes.includes(app.myName) ? app.myName : S.personnes[0]); // « personne » : par ex. « Commun » pour le compte joint
+  const par = src.par != null ? (estJoint(src.par) ? "Compte joint" : src.par) : app.myName || "";
   const known = new Set([...app.items.values()].map(i => i.data && i.data.ref).filter(Boolean));
   const n = { dep: 0, rev: 0, dup: 0, hors: 0 };
   src.operations.forEach(o => {
@@ -1550,7 +1555,7 @@ const comptesOf = S => ["Joint", ...S.personnes.map(p => "Perso " + p)];
 const compteNom = c => (c === "Joint" ? "Compte joint" : "Compte perso " + c.slice(6));
 const comptePar = c => (c === "Joint" ? "Compte joint" : c.slice(6));      // « par » des dépenses
 // Compte d'une ancienne dépense (sans compte) d'après « par » ; compte proposé pour une nouvelle saisie.
-const compteFromPar = (S, par) => (par === "Compte joint" ? "Joint" : S.personnes.includes(par) ? "Perso " + par : "");
+const compteFromPar = (S, par) => (estJoint(par) ? "Joint" : S.personnes.includes(par) ? "Perso " + par : "");
 function defaultCompte(S) {
   const last = LS.get("bf:depCompte", "");
   return comptesOf(S).includes(last) ? last : S.personnes.includes(app.myName) ? "Perso " + app.myName : "Joint";
@@ -1578,12 +1583,16 @@ function forCompte(S, fc) {
   const virements = j.pers.filter(p => p.vir > 0 && (fc === "Joint" || fc === "Perso " + p.nom)).map(p => fc === "Joint"
     ? { id: "vir-" + p.nom, sens: "in", titre: `Virement de ${p.nom}`, montant: p.vir }
     : { id: "vir-" + p.nom, sens: "out", titre: "Virement vers le compte joint", montant: p.vir });
-  return { ...S, depenses: S.depenses.filter(d => depCompte(S, d) === fc), charges: S.charges.filter(c => (c.compte || "Joint") === fc),
+  return { ...S, depenses: S.depenses.filter(d => depCompte(S, d) === fc), charges: S.charges.filter(c => c.compte === fc),
     revenus: S.revenus.filter(r => r.personne === pers), provisions: fc === "Joint" ? S.provisions : [],
     enveloppes: fc === "Joint" ? S.enveloppes : S.enveloppes.map(e => ({ ...e, prevu: 0 })),
     virements, catById: { ...S.catById, _vir: VIR_CAT } };
 }
 const comptePersonne = c => (c === "Joint" ? "Commun" : c.slice(6));       // « personne » des revenus
+// « Commun » (revenus) et « Compte commun » sont le compte joint : on l'affiche toujours « Compte joint ».
+const ALIAS_JOINT = ["joint", "compte joint", "commun", "compte commun"];
+const estJoint = v => ALIAS_JOINT.includes(fold(String(v || "")).trim());
+const personneNom = p => (p === "Commun" ? "Compte joint" : p || "");
 function findDuplicates(S, ops, compte) {
   const byRef = new Map();
   for (const it of app.items.values()) if (it.data && it.data.ref) byRef.set(it.data.ref, it);
