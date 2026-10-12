@@ -430,13 +430,17 @@ function vEnv(S) {
   const all = S.depenses.filter(d => Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m));
   const comptes = comptesOf(S), fc = comptes.includes(app.dcompte) ? app.dcompte : "all";
   const deps = fc === "all" ? all : all.filter(d => depCompte(S, d) === fc);
+  // Dépensé / Reste suivent le filtre : saisies des enveloppes de ce compte, face au budget des enveloppes (commun à tous les comptes)
+  const envIds = new Set(S.enveloppes.map(e => e.id));
+  const reelF = fc === "all" ? c.envReel : deps.filter(d => envIds.has(d.enveloppe)).reduce((a, d) => a + num(d.montant), 0);
+  const resteF = c.envPrevu - reelF, quoi = fc === "all" ? "" : (fc === "Joint" ? "compte joint" : fc.slice(6)) + " · ";
   const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle]));
   const dfmt = shortDate;
   const filtre = `<div class="aseg dfilter" role="group" aria-label="Filtrer par compte">${[["all", "Tous"], ...comptes.map(c => [c, c === "Joint" ? "Joint" : c.slice(6)])].map(([k, l]) => `<button type="button" data-dcompte="${esc(k)}" aria-pressed="${fc === k}">${esc(l)}</button>`).join("")}</div>`;
   return `${head("Dépenses", SEARCH_BTN + GEAR_BTN)}
   ${monthsBar(S)}
-  <div class="duo"><section class="card"><div class="label">Dépensé</div><div class="mid">${eur(c.envReel)}</div><div class="sub">sur ${eur(c.envPrevu)} prévus</div></section>
-  <section class="card"><div class="label">Reste</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${m ? MOIS[m - 1].toLowerCase() + " " : "année "}${S.annee}</div></section></div>
+  <div class="duo"><section class="card"><div class="label">Dépensé</div><div class="mid">${eur(reelF)}</div><div class="sub">${esc(quoi)}sur ${eur(c.envPrevu)} prévus</div></section>
+  <section class="card"><div class="label">Reste</div><div class="mid ${resteF < 0 ? "neg" : ""}">${eur(resteF)}</div><div class="sub">${esc(quoi)}${m ? MOIS[m - 1].toLowerCase() + " " : "année "}${S.annee}</div></section></div>
   <section class="card"><h2>Par enveloppe<small>touchez pour ajouter</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
   <section class="card"><h2>${m ? "Saisies du mois" : "Saisies de l'année"}<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}${fc !== "all" && deps.length ? " · " + eur2(sumOf(deps.map(d => ({ montant: num(d.montant) })))) : ""}</small></h2>
   ${filtre}<div class="list">
