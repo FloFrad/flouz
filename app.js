@@ -429,7 +429,7 @@ function envRow(S, e, m, fc = "all") {
 function vEnv(S) {
   const m = app.month, c = calc(S, m);
   const all = S.depenses.filter(d => Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m));
-  const comptes = comptesOf(S), fc = comptes.includes(app.dcompte) ? app.dcompte : "all";
+  const fc = filtreCompte(S);
   const deps = fc === "all" ? all : all.filter(d => depCompte(S, d) === fc);
   // Dépensé / Reste suivent le filtre : saisies des enveloppes de ce compte, face au budget des enveloppes (commun à tous les comptes)
   const envIds = new Set(S.enveloppes.map(e => e.id));
@@ -437,7 +437,7 @@ function vEnv(S) {
   const resteF = c.envPrevu - reelF, quoi = fc === "all" ? "" : (fc === "Joint" ? "compte joint" : fc.slice(6)) + " · ";
   const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle]));
   const dfmt = shortDate;
-  const filtre = `<div class="aseg dfilter" role="group" aria-label="Filtrer par compte">${[["all", "Tous"], ...comptes.map(c => [c, c === "Joint" ? "Joint" : c.slice(6)])].map(([k, l]) => `<button type="button" data-dcompte="${esc(k)}" aria-pressed="${fc === k}">${esc(l)}</button>`).join("")}</div>`;
+  const filtre = compteFilter(S, fc);
   return `${head("Dépenses", SEARCH_BTN + GEAR_BTN)}
   ${monthsBar(S)}
   <div class="duo"><section class="card"><div class="label">Dépensé</div><div class="mid">${eur(reelF)}</div><div class="sub">${esc(quoi)}sur ${eur(c.envPrevu)} prévus</div></section>
@@ -553,7 +553,8 @@ function itemRow(it, S, mode) {
   return `<button class="row sm" data-edit="${it.k}" data-id="${it.id}"><div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc(it.sub)}${extra}</div></div><div class="amt">${eurc(it.montant)}</div></button>`;
 }
 
-function vAnalyse(S) {
+function vAnalyse(S0) {
+  const fc = filtreCompte(S0), S = forCompte(S0, fc); // l'analyse suit le filtre par compte de l'onglet Dépenses
   const per = period(S), { out, inn } = flows(S, per.ms);
   const totOut = sumOf(out), totIn = sumOf(inn);
   const seg = ["all", "entrees", "sorties", "rec"].includes(app.aseg) ? app.aseg : "all";
@@ -564,7 +565,8 @@ function vAnalyse(S) {
     <div class="pnav"><button class="iconbtn sm" data-step="-1" aria-label="Période précédente" ${per.all || atMin ? "disabled" : ""}>${ICON.prev}</button>
       <label class="plabel"><span>${esc(per.label)}</span>${ICON.chevd}<select data-aper aria-label="Choisir la période">${opts}</select></label>
       <button class="iconbtn sm" data-step="1" aria-label="Période suivante" ${per.all || atMax ? "disabled" : ""}>${ICON.next}</button></div>
-    <div class="aseg" role="group" aria-label="Type d'analyse"><button class="ov" data-aseg="all" aria-pressed="${seg === "all"}" aria-label="Vue d'ensemble">${ICON.grid}</button>${segBtn("entrees", "Entrées")}${segBtn("sorties", "Sorties")}${segBtn("rec", "Récurrences")}</div></section>`;
+    <div class="aseg" role="group" aria-label="Type d'analyse"><button class="ov" data-aseg="all" aria-pressed="${seg === "all"}" aria-label="Vue d'ensemble">${ICON.grid}</button>${segBtn("entrees", "Entrées")}${segBtn("sorties", "Sorties")}${segBtn("rec", "Récurrences")}</div>
+    ${compteFilter(S0, fc)}</section>`;
   const todo = out.filter(x => !x.cat).length + inn.filter(x => !x.cat).length;
   const nudge = todo ? `<button class="card nudge" data-aseg="${out.some(x => !x.cat) ? "sorties" : "entrees"}"><span class="ico sm" style="background:${UNCAT.couleur}">${UNCAT.icone}</span><span class="main"><b>${plural(todo, "ligne")} à catégoriser</b><small>Touchez pour les ranger</small></span>${ICON.chev}</button>` : "";
   let body;
@@ -1395,6 +1397,17 @@ const compteCourt = c => (c === "Joint" ? "Compte joint" : c.slice(6));
 function compteBadge(S, d) {
   const c = depCompte(S, d);
   return c ? ` <span class="acct${c === "Joint" ? " joint" : ""}">${esc(compteCourt(c))}</span>` : d.par ? " · " + esc(d.par) : "";
+}
+// Filtre par compte partagé par les onglets Dépenses et Analyse (« all » = tous les comptes).
+const filtreCompte = S => (comptesOf(S).includes(app.dcompte) ? app.dcompte : "all");
+const compteFilter = (S, fc) => `<div class="aseg dfilter" role="group" aria-label="Filtrer par compte">${[["all", "Tous"], ...comptesOf(S).map(c => [c, c === "Joint" ? "Joint" : c.slice(6)])].map(([k, l]) => `<button type="button" data-dcompte="${esc(k)}" aria-pressed="${fc === k}">${esc(l)}</button>`).join("")}</div>`;
+// Budget vu d'un seul compte : ses dépenses, ses charges (« Joint » par défaut), les revenus de sa personne
+// (« Commun » pour le joint) et, pour le joint, les provisions (elles passent par le compte joint). Les enveloppes restent communes.
+function forCompte(S, fc) {
+  if (fc === "all") return S;
+  const pers = comptePersonne(fc);
+  return { ...S, depenses: S.depenses.filter(d => depCompte(S, d) === fc), charges: S.charges.filter(c => (c.compte || "Joint") === fc),
+    revenus: S.revenus.filter(r => r.personne === pers), provisions: fc === "Joint" ? S.provisions : [] };
 }
 const comptePersonne = c => (c === "Joint" ? "Commun" : c.slice(6));       // « personne » des revenus
 function findDuplicates(S, ops, compte) {
