@@ -98,6 +98,8 @@ body::before{content:"";position:fixed;top:0;left:0;right:0;height:var(--sat);z-
 .row .main{flex:1;min-width:0}
 .row .t{font-weight:800;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .s{font-size:13px;color:var(--muted);overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.acct{display:inline-block;margin-left:4px;padding:0 7px;border-radius:99px;font-size:11.5px;font-weight:700;line-height:18px;vertical-align:1px;background:var(--surface-2);color:var(--ink)}
+.acct.joint{background:var(--accent-soft);color:var(--accent)}
 .row .amt{font-weight:700;white-space:nowrap;text-align:right}
 .row .amt small{display:block;font-weight:500;font-size:12px;color:var(--muted)}
 .chev{color:var(--muted);flex:0 0 auto}
@@ -152,6 +154,10 @@ body::before{content:"";position:fixed;top:0;left:0;right:0;height:var(--sat);z-
 .plabel select{position:absolute;inset:0;width:100%;height:100%;opacity:0;font-size:16px;cursor:pointer}
 .aseg{display:flex;gap:2px;background:var(--surface-2);border:1px solid var(--line);border-radius:99px;padding:3px}
 .aseg button{flex:1 1 0;padding:8px 6px;border-radius:99px;font-size:14px;font-weight:600;color:var(--accent);white-space:nowrap;display:grid;place-items:center}
+.dfilter{margin:2px 0 8px}
+.period .dfilter{margin:8px 0 0}
+.months + .dfilter{margin:0 0 12px}
+.dfilter button{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .aseg button.ov{flex:0 0 40px;color:var(--muted)}
 .aseg button.ov svg{width:18px;height:18px}
 .aseg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
@@ -246,6 +252,8 @@ body::before{content:"";position:fixed;top:0;left:0;right:0;height:var(--sat);z-
 .rrow.dup .btn{margin-left:auto}
 .rmatch{display:block;font-size:13px;color:var(--accent);font-weight:600;text-align:left;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
 div.rmatch{color:var(--muted)}
+.rcomptes{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.rsel{max-width:60%;border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:6px 8px;font-weight:700}
 
 /* ---------- tab bar ---------- */
 .tabbar{position:fixed;left:max(14px,env(safe-area-inset-left,0px));right:max(14px,env(safe-area-inset-right,0px));bottom:calc(10px + var(--sab));z-index:20;background:var(--surface);border-radius:30px;box-shadow:var(--tab-edge,0 0 0 0 transparent),0 10px 30px rgba(30,40,80,.16);padding:6px 6px 8px;display:grid;grid-template-columns:repeat(6,1fr);align-items:end;max-width:560px;margin:0 auto}

@@ -100,6 +100,7 @@ const app = {
   items: new Map(), outbox: new Map(), cursor: null,
   tab: LS.get("bf:tab", "home"), seg: LS.get("bf:seg", "revenu"),
   month: new Date().getMonth() + 1,
+  dcompte: LS.get("bf:dcompte", "all"), // filtre par compte des saisies (onglet Dépenses)
   aseg: LS.get("bf:aseg", "all"), aview: LS.get("bf:aview", "cat"), aopen: null, // onglet Analyse
   schemaOld: false,           // la base n'accepte pas encore le type « categorie » (SQL pas mis à jour)
   sync: "ok", channel: null, flushing: false, seq: 0,
@@ -271,6 +272,7 @@ function flows(S, ms) {
     const v = mensuel ? num(r.montant) * ms.length : (ms.includes(Number(r.mois)) ? num(r.montant) : 0);
     if (v) inn.push({ k: "revenu", id: r.id, montant: v, cat: revenuCat(S, r), fixe: mensuel, titre: r.libelle || "Revenu", sub: `${r.personne || ""} · ${mensuel ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]}` });
   });
+  (S.virements || []).forEach(v => (v.sens === "in" ? inn : out).push({ k: "virement", id: v.id, montant: v.montant * ms.length, cat: "_vir", fixe: true, titre: v.titre, sub: ms.length > 1 ? "Virement mensuel · 12 mois" : "Virement mensuel" }));
   return { out, inn };
 }
 const sumOf = list => list.reduce((a, x) => a + x.montant, 0);
@@ -286,9 +288,10 @@ function calc(S, m) {
     return { revenus: sum("revenus"), revReg: sum("revReg"), charges: sum("charges"), provisions: sum("provisions"), envPrevu: sum("envPrevu"), envReel: sum("envReel"),
       env: sum("env"), rav: sum("rav"), epargne: sum("epargne"), resteEnv: sum("resteEnv") };
   }
-  const revenus = S.revenus.reduce((a, r) => a + revMonth(r, m), 0);
-  const revReg = S.revenus.filter(r => r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0);
-  const charges = S.charges.reduce((a, c) => a + num(c.montant), 0);
+  const vir = sens => (S.virements || []).filter(v => v.sens === sens).reduce((a, v) => a + v.montant, 0); // vue d'un compte (forCompte)
+  const revenus = S.revenus.reduce((a, r) => a + revMonth(r, m), 0) + vir("in");
+  const revReg = S.revenus.filter(r => r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0) + vir("in");
+  const charges = S.charges.reduce((a, c) => a + num(c.montant), 0) + vir("out");
   const provisions = S.provisions.reduce((a, p) => a + num(p.montant) / 12, 0);
   const envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
   const envReel = S.enveloppes.reduce((a, e) => a + reel(S, e.id, m), 0);
@@ -392,20 +395,24 @@ function savingsChart(S) {
     </svg>
     <p class="note" style="margin:6px 0 0">${cur > 0 && cur < 12 ? `${eur(cum[k])} fin ${MOIS[k].toLowerCase()} · trait plein : jusqu'à ce mois, pointillés : prévision.` : cur === 0 ? "Prévision sur l'année." : "Cumul des 12 mois."}</p></section>`;
 }
-function vHome(S) {
+function vHome(S0) {
+  const fc = filtreCompte(S0), S = forCompte(S0, fc); // l'accueil suit le filtre par compte (Dépenses, Analyse)
   const m = app.month, c = calc(S, m), nm = m ? MOIS[m - 1] : "Année", per = m ? "du mois" : "de l'année";
   const env = c.env;
   const tot = Math.max(c.revenus, c.charges + c.provisions + env, 1);
-  const segs = [["Charges", c.charges, "--c-charges"], ["À mettre de côté", c.provisions, "--c-prov"], ["Enveloppes", env, "--c-env"], ["Épargne", Math.max(c.epargne, 0), "--c-epargne"]];
+  const segs = [[(S.virements || []).some(v => v.sens === "out") ? "Charges et virement" : "Charges", c.charges, "--c-charges"], ["À mettre de côté", c.provisions, "--c-prov"], ["Enveloppes", env, "--c-env"], ["Épargne", Math.max(c.epargne, 0), "--c-epargne"]];
   const up = []; for (let k = 0; k < (m ? 3 : 12); k++) { const mm = m ? ((m - 1 + k) % 12) + 1 : k + 1; S.provisions.filter(p => Number(p.mois) === mm).forEach(p => up.push({ mm, p })); }
   const liv = Object.fromEntries(S.livrets.map(l => [l.id, l]));
+  // Reste des enveloppes : comme dans Dépenses, budget commun face aux saisies du compte filtré
+  const envPrevu = S0.enveloppes.reduce((a, e) => a + num(e.prevu), 0) * (m ? 1 : 12), resteEnv = envPrevu - c.envReel;
   return `${head(`${nm} <span class="yr">${S.annee}</span>`, SEARCH_BTN + GEAR_BTN)}
   ${monthsBar(S)}
-  ${exampleBanner(S)}
-  <section class="card hero"><div class="label">Épargne possible</div><div class="big">${eur(c.epargne)}</div><div class="sub">${c.revenus > 0 ? Math.round(c.epargne / c.revenus * 100) : 0} % des revenus ${per}${c.revenus > c.revReg ? " · prime incluse" : ""}</div></section>
+  ${compteFilter(S0, fc)}
+  ${exampleBanner(S0)}
+  <section class="card hero"><div class="label">Épargne possible${fc === "all" ? "" : " · " + esc(fc === "Joint" ? "compte joint" : fc.slice(6))}</div><div class="big">${eur(c.epargne)}</div><div class="sub">${c.revenus > 0 ? Math.round(c.epargne / c.revenus * 100) : 0} % des revenus ${per}${c.revenus > c.revReg ? " · prime incluse" : ""}</div></section>
   <div class="duo">
     <section class="card"><div class="label"><span class="sw" style="background:var(--c-prov)"></span>De côté</div><div class="mid">${eur(c.provisions)}</div><div class="sub">${m ? "à virer sur les livrets" : "virés sur les livrets"}</div></section>
-    <section class="card" data-tab="env" role="button"><div class="label"><span class="sw" style="background:var(--c-env)"></span>Reste</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${eur(c.envReel)} sur ${eur(c.envPrevu)}</div></section>
+    <section class="card" data-tab="env" role="button"><div class="label"><span class="sw" style="background:var(--c-env)"></span>Reste</div><div class="mid ${resteEnv < 0 ? "neg" : ""}">${eur(resteEnv)}</div><div class="sub">${eur(c.envReel)} sur ${eur(envPrevu)}</div></section>
   </div>
   ${m ? "" : yearChart(S) + savingsChart(S)}
   <section class="card"><h2>Où vont les ${eur(c.revenus)}<small>reste à vivre ${eur(c.rav)}</small></h2>
@@ -413,29 +420,38 @@ function vHome(S) {
     <div class="legend">${segs.map(([n, v, col]) => `<div class="it" style="border-color:var(${col})"><b>${eur(v)}</b><span>${n}</span></div>`).join("")}</div>
   </section>
   <section class="card"><h2>Enveloppes<small>${m ? nm.toLowerCase() : "sur l'année"}</small></h2><div class="list">
-    ${S.enveloppes.length ? S.enveloppes.map(e => envRow(S, e, m)).join("") : `<p class="empty">Aucune enveloppe. Ajoutez-en dans Budget.</p>`}
+    ${S0.enveloppes.length ? S0.enveloppes.map(e => envRow(S0, e, m, fc)).join("") : `<p class="empty">Aucune enveloppe. Ajoutez-en dans Budget.</p>`}
   </div></section>
   <section class="card"><h2>${m ? "Prochaines échéances" : "Échéances de l'année"}<small>${m ? "3 mois" : "12 mois"}</small></h2><div class="list">
     ${up.length ? up.map(({ mm, p }) => `<div class="row"><div class="main"><div class="t">${esc(p.libelle)}</div><div class="s">${MOIS[mm - 1]} · ${esc(liv[p.livret]?.nom || "sans livret")}</div></div><div class="amt">${eur(p.montant)}</div></div>`).join("") : `<p class="empty">Rien de prévu.</p>`}
   </div></section>`;
 }
-function envRow(S, e, m) {
-  const r = reel(S, e.id, m), p = num(e.prevu) * (m ? 1 : 12), left = p - r, pct = p ? Math.min(r / p * 100, 100) : (r ? 100 : 0);
-  return `<button class="row" data-act="quick" data-env="${e.id}"><div class="main"><div class="t">${esc(e.libelle)}</div><div class="bar ${left < 0 ? "over" : ""}"><i style="width:${pct}%"></i></div></div><div class="amt ${left < 0 ? "neg" : ""}">${left < 0 ? "−" + eur(-left) : eur(left)}<small>${eur(r)} / ${eur(p)}</small></div></button>`;
+// fc : compte filtré (onglet Dépenses) ; le budget de l'enveloppe reste commun à tous les comptes.
+function envRow(S, e, m, fc = "all") {
+  const r = fc === "all" ? reel(S, e.id, m) : S.depenses.filter(d => d.enveloppe === e.id && Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m) && depCompte(S, d) === fc).reduce((a, d) => a + num(d.montant), 0), p = num(e.prevu) * (m ? 1 : 12), left = p - r, pct = p ? Math.min(r / p * 100, 100) : (r ? 100 : 0);
+  return `<button class="row" data-act="quick" data-env="${e.id}"${fc !== "all" ? ` data-pcompte="${esc(fc)}"` : ""}><div class="main"><div class="t">${esc(e.libelle)}</div><div class="bar ${left < 0 ? "over" : ""}"><i style="width:${pct}%"></i></div></div><div class="amt ${left < 0 ? "neg" : ""}">${left < 0 ? "−" + eur(-left) : eur(left)}<small>${eur(r)} / ${eur(p)}</small></div></button>`;
 }
 
 function vEnv(S) {
   const m = app.month, c = calc(S, m);
-  const deps = S.depenses.filter(d => Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m));
+  const all = S.depenses.filter(d => Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m));
+  const fc = filtreCompte(S);
+  const deps = fc === "all" ? all : all.filter(d => depCompte(S, d) === fc);
+  // Dépensé / Reste suivent le filtre : saisies des enveloppes de ce compte, face au budget des enveloppes (commun à tous les comptes)
+  const envIds = new Set(S.enveloppes.map(e => e.id));
+  const reelF = fc === "all" ? c.envReel : deps.filter(d => envIds.has(d.enveloppe)).reduce((a, d) => a + num(d.montant), 0);
+  const resteF = c.envPrevu - reelF, quoi = fc === "all" ? "" : (fc === "Joint" ? "compte joint" : fc.slice(6)) + " · ";
   const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle]));
   const dfmt = shortDate;
+  const filtre = compteFilter(S, fc);
   return `${head("Dépenses", SEARCH_BTN + GEAR_BTN)}
   ${monthsBar(S)}
-  <div class="duo"><section class="card"><div class="label">Dépensé</div><div class="mid">${eur(c.envReel)}</div><div class="sub">sur ${eur(c.envPrevu)} prévus</div></section>
-  <section class="card"><div class="label">Reste</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${m ? MOIS[m - 1].toLowerCase() + " " : "année "}${S.annee}</div></section></div>
-  <section class="card"><h2>Par enveloppe<small>touchez pour ajouter</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
-  <section class="card"><h2>${m ? "Saisies du mois" : "Saisies de l'année"}<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}</small></h2><div class="list">
-    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"))} · ${dfmt(d.date)}${d.par ? " · " + esc(d.par) : ""}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
+  <div class="duo"><section class="card"><div class="label">Dépensé</div><div class="mid">${eur(reelF)}</div><div class="sub">${esc(quoi)}sur ${eur(c.envPrevu)} prévus</div></section>
+  <section class="card"><div class="label">Reste</div><div class="mid ${resteF < 0 ? "neg" : ""}">${eur(resteF)}</div><div class="sub">${esc(quoi)}${m ? MOIS[m - 1].toLowerCase() + " " : "année "}${S.annee}</div></section></div>
+  <section class="card"><h2>Par enveloppe<small>${quoi ? esc(quoi.slice(0, -3)) : "touchez pour ajouter"}</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m, fc)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
+  <section class="card"><h2>${m ? "Saisies du mois" : "Saisies de l'année"}<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}${fc !== "all" && deps.length ? " · " + eur2(sumOf(deps.map(d => ({ montant: num(d.montant) })))) : ""}</small></h2>
+  ${filtre}<div class="list">
+    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"))} · ${dfmt(d.date)}${compteBadge(S, d)}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : fc !== "all" && all.length ? `<p class="empty">Aucune dépense sur ${esc(fc === "Joint" ? "le compte joint" : "le compte de " + fc.slice(6))} pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}.</p>` : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
   </div>${autoEnvButton(S, m)}</section>
   ${pdfButton("line")}`;
 }
@@ -455,6 +471,7 @@ function vCategories(S) {
   ${block("depense", "Catégories de dépenses", "Ajouter une catégorie de dépense")}
   ${block("revenu", "Catégories de revenus", "Ajouter une catégorie de revenu")}`;
 }
+// Budget : toujours tout le foyer (revenus, charges, enveloppes… de tous les comptes), sans le filtre par compte.
 function vBudget(S) {
   const seg = app.seg;
   if (seg === "categorie") return vCategories(S);
@@ -538,12 +555,14 @@ function gauge(pct) {
   const p = Math.max(0, Math.min(100, pct));
   return `<svg class="gauge" viewBox="0 0 120 68" aria-hidden="true"><path d="M10 60A50 50 0 0 1 110 60" pathLength="100" fill="none" stroke="var(--surface-2)" stroke-width="12" stroke-linecap="round"/><path d="M10 60A50 50 0 0 1 110 60" pathLength="100" fill="none" stroke="var(--c-epargne)" stroke-width="12" stroke-linecap="round" stroke-dasharray="${p} 100"/></svg>`;
 }
+const editAttr = it => (it.k === "virement" ? 'data-tab="livrets"' : `data-edit="${it.k}" data-id="${esc(it.id)}"`);
 function itemRow(it, S, mode) {
   const extra = mode === "simple" && it.cat !== undefined ? ` · ${esc(catMeta(S, it.cat).nom)}` : "";
-  return `<button class="row sm" data-edit="${it.k}" data-id="${it.id}"><div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc(it.sub)}${extra}</div></div><div class="amt">${eurc(it.montant)}</div></button>`;
+  return `<button class="row sm" ${editAttr(it)}><div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc(it.sub)}${extra}</div></div><div class="amt">${eurc(it.montant)}</div></button>`;
 }
 
-function vAnalyse(S) {
+function vAnalyse(S0) {
+  const fc = filtreCompte(S0), S = forCompte(S0, fc); // l'analyse suit le filtre par compte de l'onglet Dépenses
   const per = period(S), { out, inn } = flows(S, per.ms);
   const totOut = sumOf(out), totIn = sumOf(inn);
   const seg = ["all", "entrees", "sorties", "rec"].includes(app.aseg) ? app.aseg : "all";
@@ -554,7 +573,8 @@ function vAnalyse(S) {
     <div class="pnav"><button class="iconbtn sm" data-step="-1" aria-label="Période précédente" ${per.all || atMin ? "disabled" : ""}>${ICON.prev}</button>
       <label class="plabel"><span>${esc(per.label)}</span>${ICON.chevd}<select data-aper aria-label="Choisir la période">${opts}</select></label>
       <button class="iconbtn sm" data-step="1" aria-label="Période suivante" ${per.all || atMax ? "disabled" : ""}>${ICON.next}</button></div>
-    <div class="aseg" role="group" aria-label="Type d'analyse"><button class="ov" data-aseg="all" aria-pressed="${seg === "all"}" aria-label="Vue d'ensemble">${ICON.grid}</button>${segBtn("entrees", "Entrées")}${segBtn("sorties", "Sorties")}${segBtn("rec", "Récurrences")}</div></section>`;
+    <div class="aseg" role="group" aria-label="Type d'analyse"><button class="ov" data-aseg="all" aria-pressed="${seg === "all"}" aria-label="Vue d'ensemble">${ICON.grid}</button>${segBtn("entrees", "Entrées")}${segBtn("sorties", "Sorties")}${segBtn("rec", "Récurrences")}</div>
+    ${compteFilter(S0, fc)}</section>`;
   const todo = out.filter(x => !x.cat).length + inn.filter(x => !x.cat).length;
   const nudge = todo ? `<button class="card nudge" data-aseg="${out.some(x => !x.cat) ? "sorties" : "entrees"}"><span class="ico sm" style="background:${UNCAT.couleur}">${UNCAT.icone}</span><span class="main"><b>${plural(todo, "ligne")} à catégoriser</b><small>Touchez pour les ranger</small></span>${ICON.chev}</button>` : "";
   let body;
@@ -613,7 +633,7 @@ function evolution(S, mode) {
 
 function vOverview(S, per, out, totIn, totOut) {
   const n = per.ms.length, bal = totIn - totOut;
-  const chFix = S.charges.reduce((a, c) => a + num(c.montant), 0), envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
+  const chFix = S.charges.reduce((a, c) => a + num(c.montant), 0) + virOut(S), envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
   const budget = (chFix + envPrevu) * n, left = budget - totOut;
   const prov = S.provisions.reduce((a, p) => a + num(p.montant) / 12, 0) * n;
   const objectif = totIn - budget - prov, reelEp = totIn - totOut - prov;
@@ -640,7 +660,7 @@ function vFlow(S, per, sens, list, total) {
   const n = per.ms.length;
   let budgetCard = "";
   if (sens === "depense") {
-    const budget = (S.charges.reduce((a, c) => a + num(c.montant), 0) + S.enveloppes.reduce((a, e) => a + num(e.prevu), 0)) * n;
+    const budget = (S.charges.reduce((a, c) => a + num(c.montant), 0) + virOut(S) + S.enveloppes.reduce((a, e) => a + num(e.prevu), 0)) * n;
     const pct = budget ? Math.round(total / budget * 100) : 0;
     budgetCard = `<button class="card budget" data-tab="budget"><div class="brow"><span class="blab"><span class="ico xs">${ICON.budget.replace("<svg", '<svg width="14" height="14"')}</span>Budget <i class="dot ${total > budget ? "bad" : ""}"></i></span><span class="bamt"><b>${eurc(total)}</b> / ${eur(budget)}</span>${ICON.chev}</div>
       <div class="brow"><div class="bar ${total > budget ? "over" : ""} grow"><i style="width:${Math.min(pct, 100)}%"></i></div><span class="pct">${pct} %</span></div></button>`;
@@ -649,7 +669,7 @@ function vFlow(S, per, sens, list, total) {
     const key = `${sens}:${g.key}`, open = app.aopen === key;
     const pct = total ? Math.round(g.total / total * 100) : 0;
     const items = [...g.items].sort((a, b) => b.montant - a.montant);
-    const edit = mode === "cat" && g.key !== "_none"
+    const edit = mode === "cat" && g.key !== "_none" && g.key !== "_vir"
       ? `<button class="btn line block sm" data-edit="categorie" data-id="${esc(g.key)}">Modifier la catégorie</button>`
       : (g.key === "_none" ? autoSortNote(S, sens, per.ms, open) : "");
     return `<div class="grp"><button class="row catrow" data-opencat="${esc(key)}" aria-expanded="${open}">${ico(g.meta)}<div class="main"><div class="t">${esc(g.meta.nom)}</div><div class="s">${pct} % • ${plural(g.items.length, noun)}</div></div><div class="amt">${eurc(g.total)}</div><span class="chev-wrap ${open ? "open" : ""}">${ICON.chev}</span></button>
@@ -679,8 +699,9 @@ function vRec(S, per) {
   const rev = S.revenus.filter(r => r.frequence === "Mensuel").map(r => ({ k: "revenu", id: r.id, titre: r.libelle, montant: num(r.montant) * n, meta: catMeta(S, revenuCat(S, r)), sub: r.personne || "" }));
   const ch = S.charges.map(c => ({ k: "charge", id: c.id, titre: c.libelle, montant: num(c.montant) * n, meta: catMeta(S, chargeCat(S, c)), sub: c.compte || "" }));
   const pr = S.provisions.map(p => ({ k: "provision", id: p.id, titre: p.libelle, montant: num(p.montant) / 12 * n, meta: { icone: "🐷", couleur: "#C28316" }, sub: `${MOIS[(Number(p.mois) || 1) - 1]} · ${eur(p.montant)} / an` }));
+  (S.virements || []).forEach(v => (v.sens === "in" ? rev : ch).push({ k: "virement", id: v.id, titre: v.titre, montant: v.montant * n, meta: catMeta(S, "_vir"), sub: "virement mensuel" }));
   const T = L => sumOf(L);
-  const block = (title, L) => `<section class="card"><h2>${title}<small>${eurc(T(L))}</small></h2><div class="list">${[...L].sort((a, b) => b.montant - a.montant).map(it => `<button class="row" data-edit="${it.k}" data-id="${it.id}">${ico(it.meta, "sm")}<div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc([it.sub, it.meta.nom].filter(Boolean).join(" · "))}</div></div><div class="amt">${eurc(it.montant)}</div></button>`).join("") || `<p class="empty">Rien pour l'instant.</p>`}</div></section>`;
+  const block = (title, L) => `<section class="card"><h2>${title}<small>${eurc(T(L))}</small></h2><div class="list">${[...L].sort((a, b) => b.montant - a.montant).map(it => `<button class="row" ${editAttr(it)}>${ico(it.meta, "sm")}<div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc([it.sub, it.meta.nom].filter(Boolean).join(" · "))}</div></div><div class="amt">${eurc(it.montant)}</div></button>`).join("") || `<p class="empty">Rien pour l'instant.</p>`}</div></section>`;
   const reste = T(rev) - T(ch) - T(pr);
   return `<section class="card"><h2>Récurrences<small>${sfx}</small></h2>
     <div class="kv"><span>Revenus réguliers</span><b>${eurc(T(rev))}</b></div>
@@ -697,6 +718,7 @@ function spark(vals, m) {
   const cur = vals[m - 1];
   return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">${zero}<polyline points="${vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}" fill="none" stroke="var(--c-prov)" stroke-width="1.8"/><circle cx="${x(m - 1)}" cy="${y(cur)}" r="3.2" fill="${cur < 0 ? "var(--neg)" : "var(--c-prov)"}"/></svg>`;
 }
+// Livrets et compte joint : toujours tout le foyer, sans le filtre par compte (Accueil, Dépenses, Analyse).
 function vLivrets(S) {
   const m = app.month, j = joint(S), c0 = calc(S, 1), mi = m || 12;
   const anyNeg = S.livrets.some(l => livretStats(S, l).bas < 0);
@@ -830,6 +852,7 @@ function openSheet(kind, id, preset = {}) {
   if (kind === "charge") draft.categorie = chargeCat(S, draft);
   if (kind === "enveloppe") draft.categorie = resolveCat(S, draft.categorie, "depense");
   if (kind === "depense") draft.categorie = it ? depCat(S, it.data) : (preset.categorie ?? envCat(S, S.enveloppes.find(e => e.id === draft.enveloppe)));
+  if (kind === "depense" && !comptesOf(S).includes(draft.compte)) draft.compte = it ? compteFromPar(S, draft.par) : defaultCompte(S);
   sheet = { kind, id, draft, confirmDel: false, cat0: draft.categorie };
   renderSheet(true);
 }
@@ -851,6 +874,7 @@ function renderSheet(first) {
       <div class="field"><span>Enveloppe</span><div class="chips">${S.enveloppes.map(e => `<button type="button" data-chip="${e.id}" aria-pressed="${d.enveloppe === e.id}">${esc(e.libelle)}</button>`).join("") || '<span class="muted">Créez d\'abord une enveloppe dans Budget.</span>'}</div></div>
       <div class="field"><span>Catégorie</span><div class="chips cats">${S.categories.filter(c => c.sens === "depense").map(c => `<button type="button" data-catchip="${esc(c.id)}" aria-pressed="${d.categorie === c.id}" style="--cc:${esc(c.couleur)}">${esc(c.icone)} ${esc(c.nom)}</button>`).join("") || '<span class="muted">Créez des catégories dans Budget.</span>'}</div></div>
       <label class="field"><span>Note (facultatif)</span><input id="f-note" data-f="note" value="${esc(d.note || "")}" placeholder="Ex. Marché, plein d'essence…"></label>
+      <div class="field"><span>Payé par</span><div class="chips">${comptesOf(S).map(c => `<button type="button" data-compte="${esc(c)}" aria-pressed="${d.compte === c}">${esc(c === "Joint" ? "Compte joint" : c.slice(6))}</button>`).join("")}</div></div>
       <label class="field"><span>Mois</span><select id="f-mois" data-f="mois">${MOIS.map((n, i) => `<option value="${i + 1}" ${Number(d.mois) === i + 1 ? "selected" : ""}>${n} ${d.annee || S.annee}</option>`).join("")}</select></label>`;
   } else {
     body = fieldsFor(k, S, d).map(([f, label, type, opts]) => {
@@ -897,6 +921,8 @@ function saveSheet() {
     if (!num(d.montant)) return err("Indiquez un montant.");
     if (!d.enveloppe && !d.ref) return err("Choisissez une enveloppe.");
     if (!id) { d.date = new Date().toISOString(); d.par = app.myName || ""; d.annee = state().annee; }
+    if (d.compte) { d.par = comptePar(d.compte); if (!id && !d.ref) LS.set("bf:depCompte", d.compte); } // « par » suit le compte choisi
+    else delete d.compte;
   } else {
     const nameF = kind === "livret" || kind === "categorie" ? "nom" : "libelle";
     if (!String(d[nameF] || "").trim()) return err("Donnez-lui un nom.");
@@ -985,7 +1011,8 @@ function compileToken(raw, S) {
   return e => tests.some(f => f(e));
 }
 
-// Toutes les lignes cherchables : saisies de dépenses, revenus et charges mensuelles.
+// Toutes les lignes cherchables : saisies de dépenses, revenus et charges mensuelles, de tous les comptes
+// (la recherche ne suit pas le filtre par compte ; « joint » ou un prénom la restreint).
 function searchEntries(S) {
   const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle]));
   const list = [];
@@ -999,7 +1026,8 @@ function searchEntries(S) {
     // le jour n'est fiable que si la date de saisie tombe bien dans le mois auquel la dépense est rattachée
     const day = !isNaN(dt) && dt.getFullYear() === y && dt.getMonth() + 1 === m ? dt.getDate() : 0;
     const env = envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée");
-    add({ k: "depense", id: d.id, montant, cat: depCat(S, d), y, m, day, titre: d.note || envName[d.enveloppe] || "Dépense", ctx: [env, day ? new Date(y, m - 1, day).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) : `${MOIS[m - 1]} ${y}`, d.par] }, [env, d.par]);
+    const c = depCompte(S, d), cpt = c ? compteCourt(c) : d.par;
+    add({ k: "depense", id: d.id, montant, cat: depCat(S, d), y, m, day, titre: d.note || envName[d.enveloppe] || "Dépense", ctx: [env, day ? new Date(y, m - 1, day).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) : `${MOIS[m - 1]} ${y}`, cpt] }, [env, d.par, cpt, "compte"]);
   });
   S.revenus.forEach(r => {
     const montant = num(r.montant); if (!montant) return;
@@ -1059,12 +1087,13 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = fal
 function go(screen) { app.screen = screen; app.authErr = ""; render(); }
 
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq],[data-rdel],[data-rundo],[data-radd]");
+  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq],[data-rdel],[data-rundo],[data-radd],[data-rcompte],[data-compte],[data-dcompte]");
   if (!t) return;
   if (t.dataset.stype) { search.type = t.dataset.stype; refreshSearch(); return; }
   if (t.dataset.rdel) { const it = app.items.get(t.dataset.rdel); if (it) del(it.kind, it.id); return; }
   if (t.dataset.rundo) { const it = app.items.get(t.dataset.rundo); if (it) put(it.kind, it.id, it.data); return; }
   if (t.dataset.radd) { reportAddAnyway(Number(t.dataset.radd)); return; }
+  if (t.dataset.rcompte) { reportPickCompte(t.dataset.rcompte); return; }
   if ("sq" in t.dataset) { search.q = t.dataset.sq; const q = $("#q"); q.value = search.q; q.focus(); refreshSearch(); return; }
   if (t.dataset.chip) {
     const d = sheet.draft; d.enveloppe = d.ref && d.enveloppe === t.dataset.chip ? "" : t.dataset.chip; // une dépense importée peut rester sans enveloppe
@@ -1072,6 +1101,8 @@ document.addEventListener("click", async e => {
     if (!d._ct) { const S = state(); d.categorie = noteCat(S, d.note, "depense") || envCat(S, S.enveloppes.find(x => x.id === d.enveloppe)); } // la catégorie suit la note ou l'enveloppe tant qu'on n'a pas choisi
     renderSheet(); return;
   }
+  if (t.dataset.dcompte) { app.dcompte = t.dataset.dcompte; LS.set("bf:dcompte", app.dcompte); render(); return; }
+  if (t.dataset.compte) { sheet.draft.compte = t.dataset.compte; renderSheet(); return; }
   if (t.dataset.catchip) { const d = sheet.draft; d.categorie = d.categorie === t.dataset.catchip ? "" : t.dataset.catchip; d._ct = true; renderSheet(); return; }
   if (t.dataset.pick) { const i = t.dataset.pick.indexOf(":"); sheet.draft[t.dataset.pick.slice(0, i)] = t.dataset.pick.slice(i + 1); renderSheet(); return; }
   if (t.dataset.aseg) { app.aseg = t.dataset.aseg; app.aopen = null; LS.set("bf:aseg", app.aseg); window.scrollTo(0, 0); render(); return; }
@@ -1085,7 +1116,11 @@ document.addEventListener("click", async e => {
   if (t.dataset.new) { openSheet(t.dataset.new, null, t.dataset.sens ? { sens: t.dataset.sens } : {}); return; }
   const a = t.dataset.act;
   switch (a) {
-    case "quick": openSheet("depense", null, t.dataset.env ? { enveloppe: t.dataset.env } : {}); break;
+    case "quick": { // filtre actif (Accueil, Dépenses, Analyse) : la saisie part sur ce compte
+      const fc = ["home", "env", "analyse"].includes(app.tab) && app.screen === "app" ? filtreCompte(state()) : "all";
+      const compte = t.dataset.pcompte || (fc !== "all" ? fc : "");
+      openSheet("depense", null, { ...(t.dataset.env ? { enveloppe: t.dataset.env } : {}), ...(compte ? { compte } : {}) }); break;
+    }
     case "closeSheet": closeSheet(); break;
     case "openSearch": openSearch(); break;
     case "closeSearch": closeSearch(); break;
@@ -1145,6 +1180,7 @@ document.addEventListener("input", e => {
 document.addEventListener("change", e => {
   const el = e.target;
   if (el.id === "importFile" || el.id === "pdfFile") { const f = el.files[0]; el.value = ""; return doImport(f); } // on ne garde pas de référence au fichier
+  if (el.id === "rcompte") { reportSetCompte(el.value); return; }
   if ("aper" in el.dataset) { app.month = Number(el.value); app.aopen = null; render(); return; }
   if (el.dataset.setting) {
     const k = el.dataset.setting; let v = el.value;
@@ -1159,6 +1195,7 @@ document.addEventListener("change", e => {
     setSettings({ personnes });
     S.revenus.filter(r => r.personne === old).forEach(r => put("revenu", r.id, { ...app.items.get(r.id).data, personne: nw }));
     S.charges.filter(c => c.compte === "Perso " + old).forEach(c => put("charge", c.id, { ...app.items.get(c.id).data, compte: "Perso " + nw }));
+    S.depenses.filter(d => d.compte === "Perso " + old).forEach(d => put("depense", d.id, { ...app.items.get(d.id).data, compte: "Perso " + nw, par: nw }));
   }
 });
 document.addEventListener("submit", async e => {
@@ -1508,7 +1545,46 @@ const words4 = s => new Set(fold(s).split(/[^a-z0-9]+/).filter(w => w.length >= 
 /* Repère les opérations déjà présentes dans le budget : même relevé déjà importé, dépense saisie à la main
  * (même montant, à quelques jours près), charge mensuelle, dépense annuelle du mois ou revenu du même montant.
  * Chaque ligne existante ne sert qu'une fois (une fois par mois pour les charges et revenus mensuels). */
-function findDuplicates(S, ops) {
+// Comptes possibles d'un relevé : « Joint » ou « Perso <prénom> » (comme le compte des charges).
+const comptesOf = S => ["Joint", ...S.personnes.map(p => "Perso " + p)];
+const compteNom = c => (c === "Joint" ? "Compte joint" : "Compte perso " + c.slice(6));
+const comptePar = c => (c === "Joint" ? "Compte joint" : c.slice(6));      // « par » des dépenses
+// Compte d'une ancienne dépense (sans compte) d'après « par » ; compte proposé pour une nouvelle saisie.
+const compteFromPar = (S, par) => (par === "Compte joint" ? "Joint" : S.personnes.includes(par) ? "Perso " + par : "");
+function defaultCompte(S) {
+  const last = LS.get("bf:depCompte", "");
+  return comptesOf(S).includes(last) ? last : S.personnes.includes(app.myName) ? "Perso " + app.myName : "Joint";
+}
+// Compte d'une dépense (enregistré, ou déduit de « par ») et son affichage dans les listes.
+const depCompte = (S, d) => (comptesOf(S).includes(d.compte) ? d.compte : compteFromPar(S, d.par));
+const compteCourt = c => (c === "Joint" ? "Compte joint" : c.slice(6));
+function compteBadge(S, d) {
+  const c = depCompte(S, d);
+  return c ? ` <span class="acct${c === "Joint" ? " joint" : ""}">${esc(compteCourt(c))}</span>` : d.par ? " · " + esc(d.par) : "";
+}
+// Filtre par compte partagé par les onglets Dépenses et Analyse (« all » = tous les comptes).
+const filtreCompte = S => (comptesOf(S).includes(app.dcompte) ? app.dcompte : "all");
+const compteFilter = (S, fc) => `<div class="aseg dfilter" role="group" aria-label="Filtrer par compte">${[["all", "Tous"], ...comptesOf(S).map(c => [c, c === "Joint" ? "Joint" : c.slice(6)])].map(([k, l]) => `<button type="button" data-dcompte="${esc(k)}" aria-pressed="${fc === k}">${esc(l)}</button>`).join("")}</div>`;
+// Budget vu d'un seul compte : ses dépenses, ses charges (« Joint » par défaut), les revenus de sa personne
+// (« Commun » pour le joint) et, pour le joint, les provisions et le budget des enveloppes (le compte joint les finance,
+// grâce aux virements de chacun) ; un compte perso garde ses dépenses dans les enveloppes, sans budget prévu.
+// Les virements mensuels vers le compte joint (calculés comme dans Livrets) entrent sur le joint et sortent des comptes perso.
+// Virement prévu d'un compte perso vers le joint : une sortie budgétée, comme une charge fixe.
+const virOut = S => (S.virements || []).filter(v => v.sens === "out").reduce((a, v) => a + v.montant, 0);
+const VIR_CAT = { id: "_vir", nom: "Virements internes", icone: "🔁", couleur: "#7A8B99", sens: "" };
+function forCompte(S, fc) {
+  if (fc === "all") return S;
+  const pers = comptePersonne(fc), j = joint(S);
+  const virements = j.pers.filter(p => p.vir > 0 && (fc === "Joint" || fc === "Perso " + p.nom)).map(p => fc === "Joint"
+    ? { id: "vir-" + p.nom, sens: "in", titre: `Virement de ${p.nom}`, montant: p.vir }
+    : { id: "vir-" + p.nom, sens: "out", titre: "Virement vers le compte joint", montant: p.vir });
+  return { ...S, depenses: S.depenses.filter(d => depCompte(S, d) === fc), charges: S.charges.filter(c => (c.compte || "Joint") === fc),
+    revenus: S.revenus.filter(r => r.personne === pers), provisions: fc === "Joint" ? S.provisions : [],
+    enveloppes: fc === "Joint" ? S.enveloppes : S.enveloppes.map(e => ({ ...e, prevu: 0 })),
+    virements, catById: { ...S.catById, _vir: VIR_CAT } };
+}
+const comptePersonne = c => (c === "Joint" ? "Commun" : c.slice(6));       // « personne » des revenus
+function findDuplicates(S, ops, compte) {
   const byRef = new Map();
   for (const it of app.items.values()) if (it.data && it.data.ref) byRef.set(it.data.ref, it);
   const pairs = [];
@@ -1521,13 +1597,13 @@ function findDuplicates(S, ops) {
     if (o.montant < 0) {
       const v = -o.montant;
       S.depenses.forEach(d => {
-        if (!sameMoney(d.montant, v)) return;
+        if (!sameMoney(d.montant, v) || (d.compte && d.compte !== compte)) return;
         const dt = new Date(d.date), sameMonth = Number(d.annee) === o.y && Number(d.mois) === o.m;
         const diff = isNaN(dt) ? null : Math.abs(dayNum(dt.getFullYear(), dt.getMonth() + 1, dt.getDate()) - od);
         if (diff != null && diff <= 6) add("depense", d.id, d.id, diff + near(d.note));
         else if (sameMonth) add("depense", d.id, d.id, 10 + near(d.note)); // saisie du même mois, enregistrée plus tard
       });
-      S.charges.forEach(c => { if (sameMoney(c.montant, v)) add("charge", c.id, `${c.id}:${o.m}`, 20 + near(c.libelle)); });
+      S.charges.forEach(c => { if (sameMoney(c.montant, v) && (!c.compte || c.compte === compte)) add("charge", c.id, `${c.id}:${o.m}`, 20 + near(c.libelle)); });
       S.provisions.forEach(p => { if (sameMoney(p.montant, v) && Number(p.mois) === o.m) add("provision", p.id, p.id, 25 + near(p.libelle)); });
     } else {
       S.revenus.forEach(r => {
@@ -1544,13 +1620,13 @@ function findDuplicates(S, ops) {
     used.add(p.key); o.match = { kind: p.kind, id: p.id, how: "saisie" };
   });
 }
-function addOp(S, o) {
+function addOp(S, o, compte) {
   const id = newId(), dep = o.montant < 0, categorie = autoCat(S, o.libelle, "revenu"), auto = categorie ? { catAuto: true } : {};
-  if (dep) put("depense", id, { ...autoDep(S, o.libelle), annee: o.y, mois: o.m, montant: -o.montant, note: o.libelle, par: app.myName || "", date: o.date + "T12:00:00.000Z", ref: o.ref });
-  else put("revenu", id, { libelle: o.libelle, personne: S.personnes.includes(app.myName) ? app.myName : S.personnes[0], type: "Autre", categorie, ...auto, frequence: "Ponctuel", mois: o.m, montant: o.montant, ordre: Date.now(), ref: o.ref });
+  if (dep) put("depense", id, { ...autoDep(S, o.libelle), annee: o.y, mois: o.m, montant: -o.montant, note: o.libelle, par: comptePar(compte), compte, date: o.date + "T12:00:00.000Z", ref: o.ref });
+  else put("revenu", id, { libelle: o.libelle, personne: comptePersonne(compte), type: "Autre", categorie, ...auto, frequence: "Ponctuel", mois: o.m, montant: o.montant, ordre: Date.now(), ref: o.ref });
   return { id, kind: o.montant < 0 ? "depense" : "revenu" };
 }
-function applyStatement(ops) {
+function applyStatement(ops, compte) {
   const S = state(), annee = Number(S.annee), count = {};
   ops.sort((a, b) => a.date.localeCompare(b.date)).forEach(o => {
     [o.y, o.m, o.d] = o.date.split("-").map(Number);
@@ -1559,8 +1635,24 @@ function applyStatement(ops) {
     o.ref = `pdf:${hash(k)}:${count[k]}`;
   });
   const inYear = ops.filter(o => o.y === annee);
-  findDuplicates(S, inYear);
-  return { total: ops.length, hors: ops.length - inYear.length, annee, added: inYear.filter(o => !o.match).map(o => addOp(S, o)), dups: inYear.filter(o => o.match) };
+  findDuplicates(S, inYear, compte);
+  return { total: ops.length, hors: ops.length - inYear.length, annee, compte, added: inYear.filter(o => !o.match).map(o => addOp(S, o, compte)), dups: inYear.filter(o => o.match) };
+}
+// Choix du compte (après la lecture, avant l'ajout). Le dernier compte choisi est proposé en premier.
+function reportPickCompte(compte) {
+  if (!report || !report.pick) return;
+  LS.set("bf:pdfCompte", compte);
+  report = applyStatement(report.ops, compte);
+  refreshReport();
+}
+// Changer de compte après coup : les lignes ajoutées depuis le relevé suivent.
+function reportSetCompte(compte) {
+  if (!report || !report.added) return;
+  report.compte = compte; LS.set("bf:pdfCompte", compte);
+  report.added.filter(a => !a.manual).forEach(a => {
+    const it = app.items.get(a.id); if (!it) return;
+    put(it.kind, it.id, it.kind === "depense" ? { ...it.data, compte, par: comptePar(compte) } : { ...it.data, personne: comptePersonne(compte) }, it.deleted);
+  });
 }
 async function importPdf(file) {
   if (!window.RelevePDF) { toast("Lecture des PDF indisponible"); return; }
@@ -1574,13 +1666,13 @@ async function importPdf(file) {
     closeReport(); toast(e && e.name === "PasswordException" ? "Ce PDF est protégé par un mot de passe" : "Impossible de lire ce PDF"); return;
   }
   if (!res.tables) { closeReport(); toast("Aucun tableau DATE · LIBELLE · VALEUR · DEBIT · CREDIT dans ce PDF"); return; }
-  report = applyStatement(res.ops);
-  showReport();
+  report = { pick: true, ops: res.ops };              // reste en mémoire seulement, le temps de choisir le compte
+  refreshReport();
 }
 function reportAddAnyway(i) {
   const o = report && report.dups[i]; if (!o) return;
   report.dups.splice(i, 1);
-  report.added.push(addOp(state(), { ...o, ref: o.match.how === "ref" ? `${o.ref}+${newId().slice(0, 4)}` : o.ref }));
+  report.added.push(addOp(state(), { ...o, ref: o.match.how === "ref" ? `${o.ref}+${newId().slice(0, 4)}` : o.ref }, report.compte));
   toast("Ligne ajoutée");
 }
 // Ligne existante à laquelle une opération correspond.
@@ -1604,7 +1696,7 @@ function reportAddedRow(S, a) {
   const when = dep ? shortDate(d.date) : MOIS[(Number(d.mois) || 1) - 1], env = dep && S.enveloppes.find(e => e.id === d.enveloppe);
   const action = gone ? `<button type="button" class="btn line sm" data-rundo="${esc(a.id)}">Rétablir</button>`
     : `<button type="button" class="iconbtn sm" data-rdel="${esc(a.id)}" aria-label="Supprimer ${esc(titre)}">${ICON.trash}</button>`;
-  return `<div class="row rrow${gone ? " gone" : ""}"><button type="button" class="rmain" ${gone ? "disabled" : `data-edit="${a.kind}" data-id="${esc(a.id)}"`}>${ico(cat, "sm")}<div class="main"><div class="t">${esc(titre)}</div><div class="s">${esc([when, cat.nom, env && env.libelle, a.manual ? "saisie manuelle" : "", gone ? "supprimée" : ""].filter(Boolean).join(" · "))}</div></div><div class="amt ${dep ? "" : "pos"}">${dep ? "" : "+"}${eur2(d.montant)}</div></button>${action}</div>`;
+  return `<div class="row rrow${gone ? " gone" : ""}"><button type="button" class="rmain" ${gone ? "disabled" : `data-edit="${a.kind}" data-id="${esc(a.id)}"`}>${ico(cat, "sm")}<div class="main"><div class="t">${esc(titre)}</div><div class="s">${esc([when, cat.nom, env && env.libelle, dep && depCompte(S, d) ? compteCourt(depCompte(S, d)) : "", a.manual ? "saisie manuelle" : "", gone ? "supprimée" : ""].filter(Boolean).join(" · "))}</div></div><div class="amt ${dep ? "" : "pos"}">${dep ? "" : "+"}${eur2(d.montant)}</div></button>${action}</div>`;
 }
 function reportDupRow(S, o, i) {
   const mi = matchInfo(S, o.match);
@@ -1615,9 +1707,18 @@ function reportDupRow(S, o, i) {
 }
 function reportHTML(S) {
   if (report.loading) return `<section class="card"><p class="empty">Lecture du relevé…</p></section>`;
+  const comptes = comptesOf(S);
+  if (report.pick) {
+    const last = comptes.includes(LS.get("bf:pdfCompte", "")) ? LS.get("bf:pdfCompte", "") : "Joint";
+    const ord = [last, ...comptes.filter(c => c !== last)];
+    return `<section class="card"><h2>Sur quel compte ?<small>${plural(report.ops.length, "opération")} lue${report.ops.length > 1 ? "s" : ""}</small></h2>
+      <p class="note" style="margin-top:0">Choisissez le compte de ce relevé : ses dépenses et ses revenus y seront rattachés, et seules les charges de ce compte servent à repérer ce qui est déjà saisi.</p>
+      <div class="rcomptes">${ord.map((c, i) => `<button type="button" class="btn ${i ? "line" : ""} block" data-rcompte="${esc(c)}">${esc(compteNom(c))}</button>`).join("")}</div></section>`;
+  }
   const r = report, live = r.added.filter(a => { const it = app.items.get(a.id); return it && !it.deleted; });
   const nDep = live.filter(a => a.kind === "depense").length, nRev = live.length - nDep;
   return `<section class="card"><h2>Résumé<small>${plural(r.total, "opération")} lue${r.total > 1 ? "s" : ""}</small></h2>
+      <div class="kv"><span>Compte</span><select id="rcompte" class="rsel" aria-label="Compte du relevé">${comptes.map(c => `<option value="${esc(c)}" ${c === r.compte ? "selected" : ""}>${esc(c === "Joint" ? "Compte joint" : c)}</option>`).join("")}</select></div>
       <div class="kv"><span>Ajoutées</span><b>${plural(nDep, "dépense")}${nRev ? ` · ${plural(nRev, "revenu")}` : ""}</b></div>
       <div class="kv"><span>Déjà saisies, non ajoutées</span><b>${r.dups.length}</b></div>
       ${r.hors ? `<div class="kv"><span>Hors de l'année ${r.annee}, ignorées</span><b>${r.hors}</b></div>` : ""}
