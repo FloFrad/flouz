@@ -96,7 +96,7 @@ Les 17 catégories de départ (12 de dépenses, 5 de revenus) sont créées au p
 
 **Réglages → Importer…** accepte aussi un fichier `releve-bancaire` (le dossier `releves/` est ignoré par git : vos relevés restent chez vous, ils ne sont jamais publiés avec le code). Contrairement à la sauvegarde JSON, il **ajoute** sans rien remplacer :
 
-- un débit devient une **dépense** (sans enveloppe, rangée sous « Relevé bancaire ») et un crédit un **revenu ponctuel** du mois ;
+- un débit devient une **dépense** (dans l'enveloppe devinée, sinon sous « Relevé bancaire ») et un crédit un **revenu ponctuel** du mois ;
 - chaque opération porte une `ref` : réimporter le même fichier n'ajoute aucun doublon ;
 - les catégories sont celles proposées dans le fichier ; ce qui n'a pas pu être deviné reste dans « À catégoriser » (Analyse), à ranger d'un toucher ;
 - seules les opérations de l'année du budget sont importées.
@@ -109,7 +109,7 @@ Format : `{"format":"releve-bancaire","operations":[{"ref":"…","date":"2026-09
 **Réglages → Importer un relevé PDF…** (ou le bouton en bas de **Dépenses**) : choisissez le relevé PDF de la banque.
 
 - L'app lit le tableau dont l'en-tête comporte les colonnes **DATE, LIBELLE, VALEUR, DEBIT, CREDIT** (sur une ou plusieurs pages). Les libellés sur plusieurs lignes sont recollés ; les lignes de solde et de total sont ignorées.
-- Un débit devient une **dépense** (sans enveloppe, catégorie devinée d'après le libellé), un crédit un **revenu ponctuel** du mois. Seules les opérations de l'année du budget sont importées.
+- Un débit devient une **dépense** (catégorie et enveloppe devinées d'après le libellé : voir *Catégories automatiques*), un crédit un **revenu ponctuel** du mois. Seules les opérations de l'année du budget sont importées.
 - **Ce qui est déjà saisi n'est pas ajouté** : une dépense du même montant saisie à quelques jours près (ou dans le même mois), une charge mensuelle ou une dépense annuelle du même montant, un revenu du même montant, ou une opération d'un relevé déjà importé.
 - À la fin, une page **Relevé importé** liste les lignes ajoutées et celles repérées comme déjà saisies (avec la ligne du budget correspondante). On peut y **modifier** une ligne (toucher), la **supprimer** (corbeille, puis *Rétablir* si besoin), **ajouter quand même** une ligne repérée, ou **ajouter une dépense** à la main.
 
@@ -120,10 +120,11 @@ Format : `{"format":"releve-bancaire","operations":[{"ref":"…","date":"2026-09
 L'app apprend de ce que vous avez déjà rangé : aucun réglage, rien n'est envoyé ailleurs.
 
 - **D'où elle apprend** : les dépenses avec une note, les charges et les revenus dont la catégorie a été choisie ou vérifiée. Une catégorie devinée ne sert d'exemple qu'une fois la ligne ouverte et enregistrée.
-- **Comment elle devine** : d'abord le commerçant (« CB CARREFOUR CITY 03/10 X1234 » et « Carrefour City » donnent « carrefour city » : sans CB, PRLV SEPA, dates ni numéros de carte), s'il a été rangé au même endroit au moins 6 fois sur 10 ; sinon les mots les plus parlants du libellé ; sinon les enseignes connues (Carrefour → Alimentation, EDF → Logement…). Ce que vous avez rangé passe avant les enseignes connues.
+- **Comment elle devine** : d'abord le commerçant (« CB CARREFOUR CITY 03/10 X1234 » et « Carrefour City » donnent « carrefour city » : sans CB, PRLV SEPA, dates ni numéros de carte), s'il a été rangé au même endroit au moins 6 fois sur 10 ; sinon les mots les plus parlants du libellé ; sinon les enseignes connues (Carrefour → Alimentation, EDF → Logement…). Ce que vous avez rangé passe avant les enseignes connues, sauf un mot vu une seule fois (« Pharmacie du centre » reste en Santé même si « Centre aéré » est en Enfants).
 - **Imports** (relevé PDF ou JSON) : chaque ligne reçoit la catégorie devinée ; ce qui reste inconnu va dans « À catégoriser ».
+- **Enveloppe des dépenses importées** : celle où vous avez rangé ce commerçant, sinon la seule enveloppe de la catégorie devinée (Lidl → Alimentation → « Courses »), sinon aucune (« Relevé bancaire »). Une dépense rangée dans une enveloppe compte dans son suivi ; touchez de nouveau l'enveloppe choisie pour l'enlever. Pour les dépenses déjà importées : **Dépenses → Ranger n dépenses du relevé dans les enveloppes**.
 - **Saisie et modification** : en tapant la note d'une dépense (ou le libellé d'un revenu ou d'une charge), la catégorie se met à jour, tant que vous ne l'avez pas choisie vous-même.
-- **Corriger une fois suffit** : changez la catégorie d'une ligne, et les lignes du même commerçant encore devinées (ou à catégoriser) suivent ; un message indique combien.
+- **Corriger une fois suffit** : changez la catégorie ou l'enveloppe d'une ligne, et les lignes du même commerçant encore devinées (ou pas encore rangées) suivent ; un message indique combien.
 - **Ranger le reste** : dans **Analyse → Sorties** (ou **Entrées**), ouvrez « À catégoriser » puis touchez **Ranger n lignes d'après l'historique**.
 
 ## Bon à savoir

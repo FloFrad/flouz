@@ -436,7 +436,7 @@ function vEnv(S) {
   <section class="card"><h2>Par enveloppe<small>touchez pour ajouter</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
   <section class="card"><h2>${m ? "Saisies du mois" : "Saisies de l'année"}<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}</small></h2><div class="list">
     ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"))} · ${dfmt(d.date)}${d.par ? " · " + esc(d.par) : ""}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
-  </div></section>
+  </div>${autoEnvButton(S, m)}</section>
   ${pdfButton("line")}`;
 }
 
@@ -665,6 +665,10 @@ function vFlow(S, per, sens, list, total) {
     <div class="list" style="margin-top:6px">${rows || `<p class="empty">Aucune ${sens === "depense" ? "dépense" : "entrée"} sur cette période.</p>`}</div></section>`;
 }
 
+function autoEnvButton(S, m) {
+  const n = S.enveloppes.length ? autoEnvable(S, m ? [m] : ALL_MONTHS).length : 0;
+  return n ? `<button class="btn line block sm" data-act="autoEnv" style="margin-top:10px">Ranger ${plural(n, "dépense")} du relevé dans les enveloppes</button>` : "";
+}
 function autoSortNote(S, sens, ms, open) {
   const n = open ? autoSortable(S, sens, ms).length : 0;
   return (n ? `<button class="btn block sm" data-act="autoSort" data-sens="${sens}">Ranger ${plural(n, "ligne")} d'après l'historique</button>` : "")
@@ -876,7 +880,7 @@ function suggestCat() {
   const k = sheet.kind, d = sheet.draft;
   if (!["depense", "revenu", "charge"].includes(k) || d._ct || (sheet.id && !d.catAuto && d.categorie)) return;
   const S = state(), env = k === "depense" && S.enveloppes.find(e => e.id === d.enveloppe);
-  const cat = learnedCat(S, lineText(k, d), k === "revenu" ? "revenu" : "depense") || (env ? envCat(S, env) : sheet.cat0);
+  const cat = noteCat(S, lineText(k, d), k === "revenu" ? "revenu" : "depense") || (env ? envCat(S, env) : sheet.cat0);
   if (cat === d.categorie) return;
   d.categorie = cat;
   if (k === "depense") document.querySelectorAll("#sheet [data-catchip]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.catchip === cat)));
@@ -900,11 +904,11 @@ function saveSheet() {
   }
   if (!id) d.ordre = Date.now();
   const nid = id || newId(), prev = id && app.items.get(id);
-  delete d.catAuto; // ligne vue et enregistrée : sa catégorie est validée et sert d'exemple
+  delete d.catAuto; delete d.envAuto; // ligne vue et enregistrée : sa catégorie et son enveloppe sont validées et servent d'exemple
   put(kind, nid, d);
   // catégorie changée (ou devinée, maintenant validée) : on range pareil les lignes semblables
-  const spread = prev && prev.data && (kind === "depense" || kind === "revenu") && (prev.data.catAuto || lineCat(state(), kind, prev.data) !== d.categorie) ? spreadCat(kind, nid, d) : 0;
-  if (spread) toast(`${catMeta(state(), d.categorie).nom} : ${plural(spread, "ligne semblable")} rangée${spread > 1 ? "s" : ""} aussi`);
+  const spread = prev && prev.data ? spreadLike(kind, nid, d, prev.data) : 0;
+  if (spread) toast(`${plural(spread, "ligne semblable")} rangée${spread > 1 ? "s" : ""} pareil`);
   if (!id && sheet.fromReport && report && report.added) { report.added.push({ id: nid, kind, manual: true }); refreshReport(); }
   if (kind === "depense" && !id) {
     const env = state().enveloppes.find(e => e.id === d.enveloppe);
@@ -1063,8 +1067,9 @@ document.addEventListener("click", async e => {
   if (t.dataset.radd) { reportAddAnyway(Number(t.dataset.radd)); return; }
   if ("sq" in t.dataset) { search.q = t.dataset.sq; const q = $("#q"); q.value = search.q; q.focus(); refreshSearch(); return; }
   if (t.dataset.chip) {
-    const d = sheet.draft; d.enveloppe = t.dataset.chip;
-    if (!d._ct) { const S = state(); d.categorie = learnedCat(S, d.note, "depense") || envCat(S, S.enveloppes.find(x => x.id === d.enveloppe)); } // la catégorie suit la note ou l'enveloppe tant qu'on n'a pas choisi
+    const d = sheet.draft; d.enveloppe = d.ref && d.enveloppe === t.dataset.chip ? "" : t.dataset.chip; // une dépense importée peut rester sans enveloppe
+    if (!d.enveloppe) { renderSheet(); return; }
+    if (!d._ct) { const S = state(); d.categorie = noteCat(S, d.note, "depense") || envCat(S, S.enveloppes.find(x => x.id === d.enveloppe)); } // la catégorie suit la note ou l'enveloppe tant qu'on n'a pas choisi
     renderSheet(); return;
   }
   if (t.dataset.catchip) { const d = sheet.draft; d.categorie = d.categorie === t.dataset.catchip ? "" : t.dataset.catchip; d._ct = true; renderSheet(); return; }
@@ -1090,6 +1095,11 @@ document.addEventListener("click", async e => {
       const S = state(), list = autoSortable(S, t.dataset.sens, period(S).ms);
       list.forEach(x => put(x.kind, x.id, { ...app.items.get(x.id).data, categorie: x.cat, catAuto: true }));
       toast(`${plural(list.length, "ligne")} rangée${list.length > 1 ? "s" : ""} · touchez-en une pour corriger`); break;
+    }
+    case "autoEnv": {
+      const S = state(), list = autoEnvable(S, app.month ? [app.month] : ALL_MONTHS);
+      list.forEach(x => { const d = app.items.get(x.id).data; put("depense", x.id, { ...d, enveloppe: x.env, envAuto: true, ...(!depCat(S, d) && x.cat ? { categorie: x.cat, catAuto: true } : {}) }); });
+      toast(`${plural(list.length, "dépense")} rangée${list.length > 1 ? "s" : ""} · touchez-en une pour corriger`); break;
     }
     case "manageCats": app.tab = "budget"; app.seg = "categorie"; LS.set("bf:tab", app.tab); LS.set("bf:seg", app.seg); window.scrollTo(0, 0); render(); break;
     case "delAsk": sheet.confirmDel = true; renderSheet(); break;
@@ -1332,8 +1342,8 @@ function importReleve(src) {
     if (y !== Number(S.annee)) { n.hors++; return; }
     known.add(o.ref);
     // catégorie du fichier, sinon devinée d'après ce qui est déjà rangé
-    const categorie = o.categorie || autoCat(S, o.libelle, m < 0 ? "depense" : "revenu"), auto = !o.categorie && categorie ? { catAuto: true } : {};
-    if (m < 0) { put("depense", newId(), { enveloppe: "", categorie, ...auto, annee: y, mois: mo, montant: -m, note: o.libelle || "", par, date: day + "T12:00:00.000Z", ref: o.ref }); n.dep++; }
+    const categorie = o.categorie || autoCat(S, o.libelle, "revenu"), auto = !o.categorie && categorie ? { catAuto: true } : {};
+    if (m < 0) { put("depense", newId(), { ...autoDep(S, o.libelle, o.categorie), annee: y, mois: mo, montant: -m, note: o.libelle || "", par, date: day + "T12:00:00.000Z", ref: o.ref }); n.dep++; }
     else { put("revenu", newId(), { libelle: o.libelle || "Virement", personne: me, type: "Autre", categorie, ...auto, frequence: "Ponctuel", mois: mo, montant: m, ordre: Date.now() + n.rev, ref: o.ref }); n.rev++; }
   });
   return n;
@@ -1376,17 +1386,21 @@ const BANK_GUESS = [
   [/ecole|cantine|creche|periscolaire|college|lycee/, "c-enfants"]
 ];
 const BANK_GUESS_REV = [[/salaire|\bpaie\b|remuneration/, "r-salaire"], [/\bcaf\b|allocation|france travail|pole emploi/, "r-aides"], [/rembours|\bcpam\b|ameli|mutuelle/, "r-rembours"], [/prime|bonus|interessement|participation/, "r-primes"]];
-function bankCat(S, libelle, sens) {
+function bankCat(S, libelle, sens) { return bankRule(S, libelle, sens) || (sens === "revenu" ? "" : resolveCat(S, guessCat(libelle), sens)); }
+function bankRule(S, libelle, sens) {
   const t = fold(libelle), hit = (sens === "revenu" ? BANK_GUESS_REV : BANK_GUESS).find(([re]) => re.test(t));
-  return resolveCat(S, hit ? hit[1] : sens === "revenu" ? "" : guessCat(libelle), sens);
+  return hit ? resolveCat(S, hit[1], sens) : "";
 }
 
 /* ---------- Catégories apprises ----------
  * La catégorie d'une nouvelle ligne est devinée d'après les lignes déjà rangées du foyer :
  * 1. même commerçant (« CB CARREFOUR CITY 12/09 X1234 » et « Carrefour City » → « carrefour city »), s'il est rangé au même endroit au moins 6 fois sur 10 ;
  * 2. sinon, les mots du libellé les plus parlants (un mot présent partout pèse peu, un mot toujours rangé au même endroit pèse beaucoup) ;
+ *    un mot vu une seule fois ne passe qu'après les enseignes connues (« pharmacie du centre » reste en Santé même si « centre aéré » est en Enfants) ;
  * 3. sinon, les enseignes connues (bankCat).
- * Seules les catégories choisies ou validées comptent : une catégorie devinée (catAuto) n'apprend rien tant qu'on n'a pas ouvert la ligne. */
+ * Seules les catégories choisies ou validées comptent : une catégorie devinée (catAuto) n'apprend rien tant qu'on n'a pas ouvert la ligne.
+ * L'enveloppe d'une dépense importée se devine de la même façon (dépenses déjà rangées dans une enveloppe, envAuto pour les devinées),
+ * sinon c'est la seule enveloppe de la catégorie devinée, s'il n'y en a qu'une. */
 const LEARN_NOISE = new Set(("cb carte paiement prlv prelevement sepa vir virement sct inst instantane recu emis faveur achat " +
   "de du des la le les et en par pour sur au aux chez fr sa sas sarl ref mandat ech echeance web www com").split(" "));
 const learnWords = s => fold(s).split(/[^a-z0-9&+]+/).filter(w => w.length >= 2 && !/\d/.test(w) && !LEARN_NOISE.has(w));
@@ -1397,56 +1411,86 @@ const learnCache = new WeakMap(); // un modèle par état : recalculé dès que 
 function learnModel(S) {
   let M = learnCache.get(S);
   if (M) return M;
-  M = { depense: { n: 0, keys: new Map(), words: new Map() }, revenu: { n: 0, keys: new Map(), words: new Map() } };
+  const idx = () => ({ n: 0, keys: new Map(), words: new Map() }), envs = new Set(S.enveloppes.map(e => e.id));
+  M = { depense: idx(), revenu: idx(), enveloppe: idx() };
   const bump = (map, k, cat) => { let m = map.get(k); if (!m) map.set(k, m = new Map()); m.set(cat, (m.get(cat) || 0) + 1); };
   const add = (sens, text, cat) => {
     const ws = learnWords(text);
     if (!cat || !ws.length) return;
-    const I = M[sens]; I.n++;
+    const I = M[sens]; I.n++; // sens : « depense », « revenu » ou « enveloppe »
     bump(I.keys, ws.slice(0, 2).join(" "), cat);
     new Set(ws).forEach(w => bump(I.words, w, cat));
   };
-  S.depenses.forEach(d => { if (!d.catAuto) add("depense", d.note, depCat(S, d)); }); // les plus récentes d'abord : elles gagnent les égalités
+  S.depenses.forEach(d => { // les plus récentes d'abord : elles gagnent les égalités
+    if (!d.catAuto) add("depense", d.note, depCat(S, d));
+    if (!d.envAuto && envs.has(d.enveloppe)) add("enveloppe", d.note, d.enveloppe);
+  });
   S.charges.forEach(c => add("depense", c.libelle, chargeCat(S, c)));
   S.revenus.forEach(r => { if (!r.catAuto) add("revenu", r.libelle, revenuCat(S, r)); });
   learnCache.set(S, M);
   return M;
 }
-function learnedCat(S, text, sens) {
-  const I = learnModel(S)[sens], ws = learnWords(text);
+// Valeur (catégorie ou enveloppe) la plus probable pour ce libellé, parmi celles que `ok` accepte ; "" si rien de sûr.
+function learnedPick(I, text, ok, minN = 1) {
+  const ws = learnWords(text);
   if (!I || !I.n || !ws.length) return "";
   const k = I.keys.get(ws.slice(0, 2).join(" "));
   if (k) {
     let best = null, tot = 0;
     k.forEach((n, c) => { tot += n; if (!best || n > best[1]) best = [c, n]; });
-    if (best[1] / tot >= .6) { const id = resolveCat(S, best[0], sens); if (id) return id; }
+    if (best[1] / tot >= .6 && ok(best[0])) return best[0];
   }
   const score = new Map();
   new Set(ws).forEach(w => {
     const m = I.words.get(w); if (!m) return;
     let tot = 0; m.forEach(n => tot += n);
+    if (tot < minN) return;
     const idf = Math.log(1 + I.n / tot);
     m.forEach((n, c) => score.set(c, (score.get(c) || 0) + n / tot * idf));
   });
   const [a, b] = [...score].sort((x, y) => y[1] - x[1]);
-  return a && a[1] >= 1 && (!b || a[1] >= 2 * b[1]) ? resolveCat(S, a[0], sens) : "";
+  return a && a[1] >= 1 && (!b || a[1] >= 2 * b[1]) && ok(a[0]) ? a[0] : "";
+}
+const learnedCat = (S, text, sens, minN) => learnedPick(learnModel(S)[sens], text, c => !!resolveCat(S, c, sens), minN);
+// Enveloppe d'une dépense importée : celle des dépenses semblables, sinon la seule enveloppe de sa catégorie.
+function autoEnv(S, text, cat) {
+  const ok = v => S.enveloppes.some(e => e.id === v), byCat = () => { const same = cat ? S.enveloppes.filter(e => envCat(S, e) === cat) : []; return same.length === 1 ? same[0].id : ""; };
+  return learnedPick(learnModel(S).enveloppe, text, ok, 2) || byCat() || learnedPick(learnModel(S).enveloppe, text, ok);
+}
+// Catégorie et enveloppe devinées d'une dépense importée (la catégorie du fichier, si elle est donnée, est gardée).
+function autoDep(S, text, given) {
+  let categorie = given || autoCat(S, text, "depense");
+  const enveloppe = autoEnv(S, text, categorie);
+  if (!categorie && enveloppe) categorie = envCat(S, S.enveloppes.find(e => e.id === enveloppe));
+  return { categorie, ...(categorie && !given ? { catAuto: true } : {}), enveloppe, ...(enveloppe ? { envAuto: true } : {}) };
 }
 // Ce qu'on a déjà rangé d'abord, puis les enseignes connues.
-const autoCat = (S, text, sens) => learnedCat(S, text, sens) || bankCat(S, text, sens);
+const noteCat = (S, text, sens) => learnedCat(S, text, sens, 2) || bankRule(S, text, sens) || learnedCat(S, text, sens);
+const autoCat = (S, text, sens) => noteCat(S, text, sens) || bankCat(S, text, sens);
 
-// Après une correction : les lignes du même commerçant encore devinées (ou à catégoriser) prennent la même catégorie.
-function spreadCat(kind, id, d) {
+// Après une correction : les lignes du même commerçant encore devinées (ou à ranger) prennent la même catégorie,
+// et les dépenses importées la même enveloppe.
+function spreadLike(kind, id, d, prev) {
   const key = merchantKey(lineText(kind, d));
-  if (!key || !d.categorie || (kind !== "depense" && kind !== "revenu")) return 0;
+  if (!key || (kind !== "depense" && kind !== "revenu")) return 0;
   const S = state();
+  const doCat = d.categorie && (prev.catAuto || lineCat(S, kind, prev) !== d.categorie);
+  const doEnv = kind === "depense" && d.enveloppe && (prev.envAuto || prev.enveloppe !== d.enveloppe);
   let n = 0;
   (kind === "depense" ? S.depenses : S.revenus).forEach(x => {
     if (x.id === id || merchantKey(lineText(kind, x)) !== key) return;
-    const cur = lineCat(S, kind, x);
-    if (cur === d.categorie || (cur && !x.catAuto)) return;
-    put(kind, x.id, { ...app.items.get(x.id).data, categorie: d.categorie, catAuto: true }); n++;
+    const patch = {}, cur = lineCat(S, kind, x);
+    if (doCat && cur !== d.categorie && (!cur || x.catAuto)) Object.assign(patch, { categorie: d.categorie, catAuto: true });
+    if (doEnv && x.ref && x.enveloppe !== d.enveloppe && (!x.enveloppe || x.envAuto)) Object.assign(patch, { enveloppe: d.enveloppe, envAuto: true });
+    if (Object.keys(patch).length) { put(kind, x.id, { ...app.items.get(x.id).data, ...patch }); n++; }
   });
   return n;
+}
+// Dépenses importées de la période, encore sans enveloppe, que l'historique permet de ranger.
+function autoEnvable(S, ms) {
+  return S.depenses.filter(d => d.ref && !d.enveloppe && Number(d.annee) === Number(S.annee) && ms.includes(Number(d.mois)))
+    .map(d => { const cat = depCat(S, d), env = autoEnv(S, d.note, cat); return { id: d.id, env, cat: cat || (env ? envCat(S, S.enveloppes.find(e => e.id === env)) : "") }; })
+    .filter(x => x.env);
 }
 // Lignes « À catégoriser » de la période que l'historique (ou une enseigne connue) permet de ranger.
 function autoSortable(S, sens, ms) {
@@ -1501,8 +1545,8 @@ function findDuplicates(S, ops) {
   });
 }
 function addOp(S, o) {
-  const id = newId(), dep = o.montant < 0, categorie = autoCat(S, o.libelle, dep ? "depense" : "revenu"), auto = categorie ? { catAuto: true } : {};
-  if (dep) put("depense", id, { enveloppe: "", categorie, ...auto, annee: o.y, mois: o.m, montant: -o.montant, note: o.libelle, par: app.myName || "", date: o.date + "T12:00:00.000Z", ref: o.ref });
+  const id = newId(), dep = o.montant < 0, categorie = autoCat(S, o.libelle, "revenu"), auto = categorie ? { catAuto: true } : {};
+  if (dep) put("depense", id, { ...autoDep(S, o.libelle), annee: o.y, mois: o.m, montant: -o.montant, note: o.libelle, par: app.myName || "", date: o.date + "T12:00:00.000Z", ref: o.ref });
   else put("revenu", id, { libelle: o.libelle, personne: S.personnes.includes(app.myName) ? app.myName : S.personnes[0], type: "Autre", categorie, ...auto, frequence: "Ponctuel", mois: o.m, montant: o.montant, ordre: Date.now(), ref: o.ref });
   return { id, kind: o.montant < 0 ? "depense" : "revenu" };
 }
@@ -1557,10 +1601,10 @@ function reportAddedRow(S, a) {
   const d = it.data, gone = it.deleted, dep = a.kind === "depense";
   const titre = dep ? d.note || "Dépense" : d.libelle || "Revenu";
   const cat = catMeta(S, dep ? depCat(S, d) : revenuCat(S, d));
-  const when = dep ? shortDate(d.date) : MOIS[(Number(d.mois) || 1) - 1];
+  const when = dep ? shortDate(d.date) : MOIS[(Number(d.mois) || 1) - 1], env = dep && S.enveloppes.find(e => e.id === d.enveloppe);
   const action = gone ? `<button type="button" class="btn line sm" data-rundo="${esc(a.id)}">Rétablir</button>`
     : `<button type="button" class="iconbtn sm" data-rdel="${esc(a.id)}" aria-label="Supprimer ${esc(titre)}">${ICON.trash}</button>`;
-  return `<div class="row rrow${gone ? " gone" : ""}"><button type="button" class="rmain" ${gone ? "disabled" : `data-edit="${a.kind}" data-id="${esc(a.id)}"`}>${ico(cat, "sm")}<div class="main"><div class="t">${esc(titre)}</div><div class="s">${esc([when, cat.nom, a.manual ? "saisie manuelle" : "", gone ? "supprimée" : ""].filter(Boolean).join(" · "))}</div></div><div class="amt ${dep ? "" : "pos"}">${dep ? "" : "+"}${eur2(d.montant)}</div></button>${action}</div>`;
+  return `<div class="row rrow${gone ? " gone" : ""}"><button type="button" class="rmain" ${gone ? "disabled" : `data-edit="${a.kind}" data-id="${esc(a.id)}"`}>${ico(cat, "sm")}<div class="main"><div class="t">${esc(titre)}</div><div class="s">${esc([when, cat.nom, env && env.libelle, a.manual ? "saisie manuelle" : "", gone ? "supprimée" : ""].filter(Boolean).join(" · "))}</div></div><div class="amt ${dep ? "" : "pos"}">${dep ? "" : "+"}${eur2(d.montant)}</div></button>${action}</div>`;
 }
 function reportDupRow(S, o, i) {
   const mi = matchInfo(S, o.match);
