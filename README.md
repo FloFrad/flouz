@@ -7,7 +7,7 @@ Elle fonctionne aussi hors ligne : ce que vous saisissez part dès que le résea
 **Ce qu'elle fait**
 
 - **Accueil** : pour le mois choisi, l'épargne possible, ce qu'il faut mettre de côté sur les livrets et ce qu'il reste à dépenser dans les enveloppes.
-- **Bouton +** : saisir une dépense en 3 secondes (montant → enveloppe → Ajouter). La catégorie suit l'enveloppe, et se change d'un toucher.
+- **Bouton +** : saisir une dépense en 3 secondes (montant → enveloppe → Ajouter). La catégorie suit l'enveloppe (ou la note, si ce nom a déjà été rangé : voir *Catégories automatiques*), et se change d'un toucher.
 - **Dépenses** : l'état de chaque enveloppe et la liste des saisies du mois, avec qui les a faites.
 - **Recherche** : la loupe en haut de **Accueil** et de **Dépenses** ouvre une recherche sur toutes les saisies, revenus et charges. Tapez plusieurs mots (ils doivent tous correspondre) : un libellé, une enveloppe, une catégorie, une personne, un montant (`45`, `45,50`, `>100`, `<20`, `50..120`) ou une date (`mars`, `2026`, `12/03/2026`, `03/2026`, `>=01/03/2026`, `01/03..15/03`). Touchez un résultat pour le modifier.
 - **Analyse** : pour le mois (ou toute l'année), la balance entrées / sorties, un anneau des dépenses (ou des revenus) par catégorie, le budget consommé, les récurrences. Touchez une catégorie pour voir ses lignes.
@@ -114,6 +114,17 @@ Format : `{"format":"releve-bancaire","operations":[{"ref":"…","date":"2026-09
 - À la fin, une page **Relevé importé** liste les lignes ajoutées et celles repérées comme déjà saisies (avec la ligne du budget correspondante). On peut y **modifier** une ligne (toucher), la **supprimer** (corbeille, puis *Rétablir* si besoin), **ajouter quand même** une ligne repérée, ou **ajouter une dépense** à la main.
 
 **Données sensibles** : le PDF est lu dans le téléphone (bibliothèque `vendor/pdfjs/`, sans connexion). Il n'est **ni envoyé, ni conservé** : ni le fichier, ni le relevé complet (solde, numéro de compte, adresse…) ne sont enregistrés, et le rapport disparaît en touchant *Terminé*. Seules les lignes ajoutées sont enregistrées dans le budget, comme une saisie normale (date, montant, libellé sans les numéros de carte). Les fichiers `*.pdf` sont ignorés par git.
+
+## Catégories automatiques
+
+L'app apprend de ce que vous avez déjà rangé : aucun réglage, rien n'est envoyé ailleurs.
+
+- **D'où elle apprend** : les dépenses avec une note, les charges et les revenus dont la catégorie a été choisie ou vérifiée. Une catégorie devinée ne sert d'exemple qu'une fois la ligne ouverte et enregistrée.
+- **Comment elle devine** : d'abord le commerçant (« CB CARREFOUR CITY 03/10 X1234 » et « Carrefour City » donnent « carrefour city » : sans CB, PRLV SEPA, dates ni numéros de carte), s'il a été rangé au même endroit au moins 6 fois sur 10 ; sinon les mots les plus parlants du libellé ; sinon les enseignes connues (Carrefour → Alimentation, EDF → Logement…). Ce que vous avez rangé passe avant les enseignes connues.
+- **Imports** (relevé PDF ou JSON) : chaque ligne reçoit la catégorie devinée ; ce qui reste inconnu va dans « À catégoriser ».
+- **Saisie et modification** : en tapant la note d'une dépense (ou le libellé d'un revenu ou d'une charge), la catégorie se met à jour, tant que vous ne l'avez pas choisie vous-même.
+- **Corriger une fois suffit** : changez la catégorie d'une ligne, et les lignes du même commerçant encore devinées (ou à catégoriser) suivent ; un message indique combien.
+- **Ranger le reste** : dans **Analyse → Sorties** (ou **Entrées**), ouvrez « À catégoriser » puis touchez **Ranger n lignes d'après l'historique**.
 
 ## Bon à savoir
 
