@@ -708,6 +708,7 @@ function spark(vals, m) {
   const cur = vals[m - 1];
   return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">${zero}<polyline points="${vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}" fill="none" stroke="var(--c-prov)" stroke-width="1.8"/><circle cx="${x(m - 1)}" cy="${y(cur)}" r="3.2" fill="${cur < 0 ? "var(--neg)" : "var(--c-prov)"}"/></svg>`;
 }
+// Livrets et compte joint : toujours tout le foyer, sans le filtre par compte (Accueil, Dépenses, Analyse).
 function vLivrets(S) {
   const m = app.month, j = joint(S), c0 = calc(S, 1), mi = m || 12;
   const anyNeg = S.livrets.some(l => livretStats(S, l).bas < 0);
