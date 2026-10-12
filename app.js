@@ -435,7 +435,7 @@ function vEnv(S) {
   <section class="card"><div class="label">Reste</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${m ? MOIS[m - 1].toLowerCase() + " " : "année "}${S.annee}</div></section></div>
   <section class="card"><h2>Par enveloppe<small>touchez pour ajouter</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
   <section class="card"><h2>${m ? "Saisies du mois" : "Saisies de l'année"}<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}</small></h2><div class="list">
-    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"))} · ${dfmt(d.date)}${d.par ? " · " + esc(d.par) : ""}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
+    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"))} · ${dfmt(d.date)}${compteBadge(S, d)}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
   </div></section>
   ${pdfButton("line")}`;
 }
@@ -978,7 +978,8 @@ function searchEntries(S) {
     // le jour n'est fiable que si la date de saisie tombe bien dans le mois auquel la dépense est rattachée
     const day = !isNaN(dt) && dt.getFullYear() === y && dt.getMonth() + 1 === m ? dt.getDate() : 0;
     const env = envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée");
-    add({ k: "depense", id: d.id, montant, cat: depCat(S, d), y, m, day, titre: d.note || envName[d.enveloppe] || "Dépense", ctx: [env, day ? new Date(y, m - 1, day).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) : `${MOIS[m - 1]} ${y}`, d.par] }, [env, d.par]);
+    const c = depCompte(S, d), cpt = c ? compteCourt(c) : d.par;
+    add({ k: "depense", id: d.id, montant, cat: depCat(S, d), y, m, day, titre: d.note || envName[d.enveloppe] || "Dépense", ctx: [env, day ? new Date(y, m - 1, day).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) : `${MOIS[m - 1]} ${y}`, cpt] }, [env, d.par, cpt, "compte"]);
   });
   S.revenus.forEach(r => {
     const montant = num(r.montant); if (!montant) return;
@@ -1377,6 +1378,13 @@ function defaultCompte(S) {
   const last = LS.get("bf:depCompte", "");
   return comptesOf(S).includes(last) ? last : S.personnes.includes(app.myName) ? "Perso " + app.myName : "Joint";
 }
+// Compte d'une dépense (enregistré, ou déduit de « par ») et son affichage dans les listes.
+const depCompte = (S, d) => (comptesOf(S).includes(d.compte) ? d.compte : compteFromPar(S, d.par));
+const compteCourt = c => (c === "Joint" ? "Compte joint" : c.slice(6));
+function compteBadge(S, d) {
+  const c = depCompte(S, d);
+  return c ? ` <span class="acct${c === "Joint" ? " joint" : ""}">${esc(compteCourt(c))}</span>` : d.par ? " · " + esc(d.par) : "";
+}
 const comptePersonne = c => (c === "Joint" ? "Commun" : c.slice(6));       // « personne » des revenus
 function findDuplicates(S, ops, compte) {
   const byRef = new Map();
@@ -1490,7 +1498,7 @@ function reportAddedRow(S, a) {
   const when = dep ? shortDate(d.date) : MOIS[(Number(d.mois) || 1) - 1];
   const action = gone ? `<button type="button" class="btn line sm" data-rundo="${esc(a.id)}">Rétablir</button>`
     : `<button type="button" class="iconbtn sm" data-rdel="${esc(a.id)}" aria-label="Supprimer ${esc(titre)}">${ICON.trash}</button>`;
-  return `<div class="row rrow${gone ? " gone" : ""}"><button type="button" class="rmain" ${gone ? "disabled" : `data-edit="${a.kind}" data-id="${esc(a.id)}"`}>${ico(cat, "sm")}<div class="main"><div class="t">${esc(titre)}</div><div class="s">${esc([when, cat.nom, a.manual ? "saisie manuelle" : "", gone ? "supprimée" : ""].filter(Boolean).join(" · "))}</div></div><div class="amt ${dep ? "" : "pos"}">${dep ? "" : "+"}${eur2(d.montant)}</div></button>${action}</div>`;
+  return `<div class="row rrow${gone ? " gone" : ""}"><button type="button" class="rmain" ${gone ? "disabled" : `data-edit="${a.kind}" data-id="${esc(a.id)}"`}>${ico(cat, "sm")}<div class="main"><div class="t">${esc(titre)}</div><div class="s">${esc([when, cat.nom, dep && depCompte(S, d) ? compteCourt(depCompte(S, d)) : "", a.manual ? "saisie manuelle" : "", gone ? "supprimée" : ""].filter(Boolean).join(" · "))}</div></div><div class="amt ${dep ? "" : "pos"}">${dep ? "" : "+"}${eur2(d.montant)}</div></button>${action}</div>`;
 }
 function reportDupRow(S, o, i) {
   const mi = matchInfo(S, o.match);
