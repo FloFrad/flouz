@@ -986,7 +986,8 @@ function compileToken(raw, S) {
   return e => tests.some(f => f(e));
 }
 
-// Toutes les lignes cherchables : saisies de dépenses, revenus et charges mensuelles.
+// Toutes les lignes cherchables : saisies de dépenses, revenus et charges mensuelles, de tous les comptes
+// (la recherche ne suit pas le filtre par compte ; « joint » ou un prénom la restreint).
 function searchEntries(S) {
   const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle]));
   const list = [];
