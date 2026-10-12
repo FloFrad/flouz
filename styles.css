@@ -154,6 +154,8 @@ body::before{content:"";position:fixed;top:0;left:0;right:0;height:var(--sat);z-
 .plabel select{position:absolute;inset:0;width:100%;height:100%;opacity:0;font-size:16px;cursor:pointer}
 .aseg{display:flex;gap:2px;background:var(--surface-2);border:1px solid var(--line);border-radius:99px;padding:3px}
 .aseg button{flex:1 1 0;padding:8px 6px;border-radius:99px;font-size:14px;font-weight:600;color:var(--accent);white-space:nowrap;display:grid;place-items:center}
+.dfilter{margin:2px 0 8px}
+.dfilter button{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .aseg button.ov{flex:0 0 40px;color:var(--muted)}
 .aseg button.ov svg{width:18px;height:18px}
 .aseg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}

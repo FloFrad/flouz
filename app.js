@@ -100,6 +100,7 @@ const app = {
   items: new Map(), outbox: new Map(), cursor: null,
   tab: LS.get("bf:tab", "home"), seg: LS.get("bf:seg", "revenu"),
   month: new Date().getMonth() + 1,
+  dcompte: LS.get("bf:dcompte", "all"), // filtre par compte des saisies (onglet Dépenses)
   aseg: LS.get("bf:aseg", "all"), aview: LS.get("bf:aview", "cat"), aopen: null, // onglet Analyse
   schemaOld: false,           // la base n'accepte pas encore le type « categorie » (SQL pas mis à jour)
   sync: "ok", channel: null, flushing: false, seq: 0,
@@ -426,16 +427,20 @@ function envRow(S, e, m) {
 
 function vEnv(S) {
   const m = app.month, c = calc(S, m);
-  const deps = S.depenses.filter(d => Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m));
+  const all = S.depenses.filter(d => Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m));
+  const comptes = comptesOf(S), fc = comptes.includes(app.dcompte) ? app.dcompte : "all";
+  const deps = fc === "all" ? all : all.filter(d => depCompte(S, d) === fc);
   const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle]));
   const dfmt = shortDate;
+  const filtre = `<div class="aseg dfilter" role="group" aria-label="Filtrer par compte">${[["all", "Tous"], ...comptes.map(c => [c, c === "Joint" ? "Joint" : c.slice(6)])].map(([k, l]) => `<button type="button" data-dcompte="${esc(k)}" aria-pressed="${fc === k}">${esc(l)}</button>`).join("")}</div>`;
   return `${head("Dépenses", SEARCH_BTN + GEAR_BTN)}
   ${monthsBar(S)}
   <div class="duo"><section class="card"><div class="label">Dépensé</div><div class="mid">${eur(c.envReel)}</div><div class="sub">sur ${eur(c.envPrevu)} prévus</div></section>
   <section class="card"><div class="label">Reste</div><div class="mid ${c.resteEnv < 0 ? "neg" : ""}">${eur(c.resteEnv)}</div><div class="sub">${m ? MOIS[m - 1].toLowerCase() + " " : "année "}${S.annee}</div></section></div>
   <section class="card"><h2>Par enveloppe<small>touchez pour ajouter</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
-  <section class="card"><h2>${m ? "Saisies du mois" : "Saisies de l'année"}<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}</small></h2><div class="list">
-    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"))} · ${dfmt(d.date)}${compteBadge(S, d)}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
+  <section class="card"><h2>${m ? "Saisies du mois" : "Saisies de l'année"}<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}${fc !== "all" && deps.length ? " · " + eur2(sumOf(deps.map(d => ({ montant: num(d.montant) })))) : ""}</small></h2>
+  ${filtre}<div class="list">
+    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"))} · ${dfmt(d.date)}${compteBadge(S, d)}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : fc !== "all" && all.length ? `<p class="empty">Aucune dépense sur ${esc(fc === "Joint" ? "le compte joint" : "le compte de " + fc.slice(6))} pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}.</p>` : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
   </div></section>
   ${pdfButton("line")}`;
 }
@@ -1039,7 +1044,7 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = fal
 function go(screen) { app.screen = screen; app.authErr = ""; render(); }
 
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq],[data-rdel],[data-rundo],[data-radd],[data-rcompte],[data-compte]");
+  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq],[data-rdel],[data-rundo],[data-radd],[data-rcompte],[data-compte],[data-dcompte]");
   if (!t) return;
   if (t.dataset.stype) { search.type = t.dataset.stype; refreshSearch(); return; }
   if (t.dataset.rdel) { const it = app.items.get(t.dataset.rdel); if (it) del(it.kind, it.id); return; }
@@ -1052,6 +1057,7 @@ document.addEventListener("click", async e => {
     if (!d._ct) { const S = state(); d.categorie = envCat(S, S.enveloppes.find(x => x.id === d.enveloppe)); } // la catégorie suit l'enveloppe tant qu'on n'a pas choisi
     renderSheet(); return;
   }
+  if (t.dataset.dcompte) { app.dcompte = t.dataset.dcompte; LS.set("bf:dcompte", app.dcompte); render(); return; }
   if (t.dataset.compte) { sheet.draft.compte = t.dataset.compte; renderSheet(); return; }
   if (t.dataset.catchip) { const d = sheet.draft; d.categorie = d.categorie === t.dataset.catchip ? "" : t.dataset.catchip; d._ct = true; renderSheet(); return; }
   if (t.dataset.pick) { const i = t.dataset.pick.indexOf(":"); sheet.draft[t.dataset.pick.slice(0, i)] = t.dataset.pick.slice(i + 1); renderSheet(); return; }
