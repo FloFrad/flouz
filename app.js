@@ -255,6 +255,27 @@ const catMeta = (S, id) => S.catById[id] || UNCAT;
 const chargeCat = (S, c) => resolveCat(S, c.categorie, "depense", LEG_CHARGE);
 const revenuCat = (S, r) => resolveCat(S, "categorie" in r ? r.categorie : LEG_REVENU[r.type], "revenu");
 const envCat = (S, e) => e ? (resolveCat(S, e.categorie, "depense") || resolveCat(S, guessCat(e.libelle), "depense")) : "";
+/* Dépense reliée à une charge mensuelle (d.charge) : c'est le paiement réel de la charge. Ce mois-là, elle remplace
+ * le montant prévu de la charge (au lieu de s'y ajouter) et ne compte dans aucune enveloppe. */
+const chargeOf = (S, d) => (d.charge && S.charges.find(c => c.id === d.charge)) || null;
+const paidCache = new WeakMap();
+// Paiements reliés de l'année : « idCharge:mois » → { montant, n }
+function chargePaid(S) {
+  let P = paidCache.get(S);
+  if (P) return P;
+  P = new Map();
+  S.depenses.forEach(d => {
+    if (Number(d.annee) !== Number(S.annee) || !chargeOf(S, d)) return;
+    const k = `${d.charge}:${Number(d.mois)}`, e = P.get(k) || { montant: 0, n: 0 };
+    e.montant += num(d.montant); e.n++; P.set(k, e);
+  });
+  paidCache.set(S, P);
+  return P;
+}
+// Où est rangée une dépense : sa charge, son enveloppe, ou « Relevé bancaire » (importée sans enveloppe).
+const depLieu = (S, d, envName) => { const c = chargeOf(S, d); return c ? "Charge · " + (c.libelle || "sans nom") : envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"); };
+// Montant d'une charge pour un mois : le paiement relié s'il y en a un, sinon le montant prévu.
+const chargeMonth = (S, c, m) => { const p = chargePaid(S).get(`${c.id}:${m}`); return p ? p.montant : num(c.montant); };
 // Une saisie garde sa catégorie ; les anciennes (sans choix) prennent celle de leur enveloppe.
 const depCat = (S, d) => "categorie" in d ? resolveCat(S, d.categorie, "depense") : envCat(S, S.enveloppes.find(e => e.id === d.enveloppe));
 
@@ -263,12 +284,14 @@ function flows(S, ms) {
   const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle]));
   const out = [], inn = [];
   S.depenses.forEach(d => {
-    if (Number(d.annee) !== Number(S.annee) || !ms.includes(Number(d.mois)) || !num(d.montant)) return;
-    out.push({ k: "depense", id: d.id, montant: num(d.montant), cat: depCat(S, d), fixe: false, titre: d.note || envName[d.enveloppe] || "Dépense", sub: `${envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée")} · ${shortDate(d.date)}` });
+    if (Number(d.annee) !== Number(S.annee) || !ms.includes(Number(d.mois)) || !num(d.montant) || chargeOf(S, d)) return; // paiement d'une charge : compté avec elle
+    out.push({ k: "depense", id: d.id, montant: num(d.montant), cat: depCat(S, d), fixe: false, titre: d.note || envName[d.enveloppe] || "Dépense", sub: `${depLieu(S, d, envName)} · ${shortDate(d.date)}` });
   });
   S.charges.forEach(c => {
-    if (!num(c.montant)) return;
-    out.push({ k: "charge", id: c.id, montant: num(c.montant) * ms.length, cat: chargeCat(S, c), fixe: true, titre: c.libelle || "Charge", sub: ms.length > 1 ? "Charge mensuelle · 12 mois" : "Charge mensuelle" });
+    const montant = ms.reduce((a, m) => a + chargeMonth(S, c, m), 0), nPaid = ms.filter(m => chargePaid(S).has(`${c.id}:${m}`)).length;
+    if (!montant) return;
+    const paid = nPaid ? (ms.length > 1 ? ` · ${nPaid} payé${nPaid > 1 ? "s" : ""}` : " · payée") : "";
+    out.push({ k: "charge", id: c.id, montant, cat: chargeCat(S, c), fixe: true, titre: c.libelle || "Charge", sub: (ms.length > 1 ? "Charge mensuelle · 12 mois" : "Charge mensuelle") + paid });
   });
   S.revenus.forEach(r => {
     const mensuel = r.frequence === "Mensuel";
@@ -294,7 +317,7 @@ function calc(S, m) {
   const vir = sens => (S.virements || []).filter(v => v.sens === sens).reduce((a, v) => a + v.montant, 0); // vue d'un compte (forCompte)
   const revenus = S.revenus.reduce((a, r) => a + revMonth(r, m), 0) + vir("in");
   const revReg = S.revenus.filter(r => r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0) + vir("in");
-  const charges = S.charges.reduce((a, c) => a + num(c.montant), 0) + vir("out");
+  const charges = S.charges.reduce((a, c) => a + chargeMonth(S, c, m), 0) + vir("out");
   const provisions = S.provisions.reduce((a, p) => a + num(p.montant) / 12, 0);
   const envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
   const envReel = S.enveloppes.reduce((a, e) => a + reel(S, e.id, m), 0);
@@ -454,7 +477,7 @@ function vEnv(S) {
   <section class="card"><h2>Par enveloppe<small>${quoi ? esc(quoi.slice(0, -3)) : "touchez pour ajouter"}</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m, fc)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
   <section class="card"><h2>${m ? "Saisies du mois" : "Saisies de l'année"}<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}${fc !== "all" && deps.length ? " · " + eur2(sumOf(deps.map(d => ({ montant: num(d.montant) })))) : ""}</small></h2>
   ${filtre}<div class="list">
-    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"))} · ${dfmt(d.date)}${compteBadge(S, d)}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : fc !== "all" && all.length ? `<p class="empty">Aucune dépense sur ${esc(fc === "Joint" ? "le compte joint" : "le compte de " + fc.slice(6))} pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}.</p>` : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
+    ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(depLieu(S, d, envName))} · ${dfmt(d.date)}${compteBadge(S, d)}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : fc !== "all" && all.length ? `<p class="empty">Aucune dépense sur ${esc(fc === "Joint" ? "le compte joint" : "le compte de " + fc.slice(6))} pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}.</p>` : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
   </div>${autoEnvButton(S, m)}</section>
   ${pdfButton("line")}`;
 }
@@ -725,7 +748,7 @@ function spark(vals, m) {
 function vLivrets(S) {
   const m = app.month, j = joint(S), c0 = calc(S, 1), mi = m || 12;
   const anyNeg = S.livrets.some(l => livretStats(S, l).bas < 0);
-  const regC = { rev: c0.revReg, ch: c0.charges, pr: c0.provisions, en: c0.envPrevu };
+  const regC = { rev: c0.revReg, ch: S.charges.reduce((a, c) => a + num(c.montant), 0), pr: c0.provisions, en: c0.envPrevu }; // montants prévus, sans les paiements reliés
   const ep = regC.rev - regC.ch - regC.pr - regC.en;
   return `${head("Livrets")}
   ${monthsBar(S)}
@@ -875,8 +898,11 @@ function renderSheet(first) {
       <div class="field"><span>Couleur</span><div class="picks colors">${CAT_COLORS.map(c => `<button type="button" data-pick="couleur:${c}" aria-pressed="${d.couleur === c}" aria-label="Couleur ${c}" style="background:${c}"></button>`).join("")}</div></div>
       ${sheet.id ? `<p class="note">Supprimer une catégorie remet ses saisies dans « À catégoriser ».</p>` : ""}`;
   } else if (k === "depense") {
+    const ch = chargeOf(S, d), chargeField = S.charges.length ? `<label class="field"><span>Charge mensuelle</span><select id="f-charge" data-f="charge"><option value="">Aucune (dépense courante)</option>${S.charges.map(c => `<option value="${esc(c.id)}" ${ch && ch.id === c.id ? "selected" : ""}>${esc(c.libelle || "Charge")} · ${eur(c.montant)} / mois</option>`).join("")}</select></label>
+      ${ch ? `<p class="note" style="margin-top:-4px">Paiement de « ${esc(ch.libelle || "Charge")} » : en ${MOIS[(Number(d.mois) || 1) - 1].toLowerCase()}, il remplace les ${eur(ch.montant)} prévus (rien n'est compté deux fois) et n'entre dans aucune enveloppe.</p>` : ""}` : "";
     body = `<div class="amountwrap"><input class="amount" id="f-montant" data-f="montant" inputmode="decimal" placeholder="0" value="${d.montant != null && d.montant !== "" ? esc(String(d.montant).replace(".", ",")) : ""}" aria-label="Montant"><span>€</span></div>
-      <div class="field"><span>Enveloppe</span><div class="chips">${S.enveloppes.map(e => `<button type="button" data-chip="${e.id}" aria-pressed="${d.enveloppe === e.id}">${esc(e.libelle)}</button>`).join("") || '<span class="muted">Créez d\'abord une enveloppe dans Budget.</span>'}</div></div>
+      ${ch ? "" : `<div class="field"><span>Enveloppe</span><div class="chips">${S.enveloppes.map(e => `<button type="button" data-chip="${e.id}" aria-pressed="${d.enveloppe === e.id}">${esc(e.libelle)}</button>`).join("") || '<span class="muted">Créez d\'abord une enveloppe dans Budget.</span>'}</div></div>`}
+      ${chargeField}
       <div class="field"><span>Catégorie</span><div class="chips cats">${S.categories.filter(c => c.sens === "depense").map(c => `<button type="button" data-catchip="${esc(c.id)}" aria-pressed="${d.categorie === c.id}" style="--cc:${esc(c.couleur)}">${esc(c.icone)} ${esc(c.nom)}</button>`).join("") || '<span class="muted">Créez des catégories dans Budget.</span>'}</div></div>
       <label class="field"><span>Note (facultatif)</span><input id="f-note" data-f="note" value="${esc(d.note || "")}" placeholder="Ex. Marché, plein d'essence…"></label>
       <div class="field"><span>Payé par</span><div class="chips">${comptesOf(S).map(c => `<button type="button" data-compte="${esc(c)}" aria-pressed="${d.compte === c}">${esc(c === "Joint" ? "Compte joint" : c.slice(6))}</button>`).join("")}</div></div>
@@ -889,6 +915,7 @@ function renderSheet(first) {
       return `<label class="field"><span>${label}</span><input id="f-${f}" data-f="${f}" value="${esc(v)}" autocapitalize="sentences"></label>`;
     }).join("");
     if (k === "provision" && num(d.montant)) body += `<p class="note">À mettre de côté : <b>${eur(num(d.montant) / 12)}</b> par mois.</p>`;
+    if (k === "charge" && sheet.id) body += chargePayments(S, sheet.id);
   }
   const delZone = sheet.id ? (sheet.confirmDel
     ? `<div class="btnrow"><button type="button" class="btn danger" data-act="delConfirm">Supprimer définitivement</button><button type="button" class="btn line" data-act="delCancel">Annuler</button></div>`
@@ -902,6 +929,24 @@ function renderSheet(first) {
   if (!first) { const pn = $("#sheet .panel"); if (pn) pn.scrollTop = keepY; }
   if (first) { const f = k === "depense" ? $("#f-montant") : $("#sheet input[data-f]"); if (f && !sheet.id) setTimeout(() => f.focus(), 60); }
   else if (focusId) { const el = document.getElementById(focusId); if (el) el.focus(); }
+}
+// Fiche d'une charge : ses paiements reliés de l'année (chacun remplace le montant prévu de son mois).
+function chargePayments(S, id) {
+  const deps = S.depenses.filter(x => x.charge === id && Number(x.annee) === Number(S.annee)).sort((a, b) => Number(b.mois) - Number(a.mois) || String(b.date || "").localeCompare(String(a.date || "")));
+  const m = app.month || new Date().getMonth() + 1;
+  return `<div class="field"><span>Paiements reliés · ${S.annee}</span><div class="list">${deps.map(x => `<button type="button" class="row" data-edit="depense" data-id="${esc(x.id)}"><div class="main"><div class="t">${MOIS[(Number(x.mois) || 1) - 1]}</div><div class="s">${esc([x.note, shortDate(x.date), depCompte(S, x) ? compteCourt(depCompte(S, x)) : ""].filter(Boolean).join(" · "))}</div></div><div class="amt">${eur2(x.montant)}</div>${ICON.chev}</button>`).join("") || `<p class="empty">Aucun paiement relié.</p>`}</div></div>
+    <button type="button" class="btn line block" data-act="payCharge" data-id="${esc(id)}">Saisir le paiement de ${MOIS[m - 1].toLowerCase()}</button>
+    <p class="note">Un paiement relié (une dépense, saisie ou importée du relevé) remplace le montant prévu ce mois-là. Pour relier une dépense existante : ouvrez-la, puis choisissez la charge.</p>`;
+}
+// Relier (ou délier) la dépense en cours à une charge : plus d'enveloppe ; catégorie, note et compte de la charge par défaut.
+function pickCharge() {
+  const S = state(), d = sheet.draft, c = chargeOf(S, d);
+  if (!c) { d.charge = ""; return; }
+  d.enveloppe = ""; delete d.envAuto;
+  if (!d._ct) d.categorie = chargeCat(S, c);
+  if (!String(d.note || "").trim()) d.note = c.libelle || "";
+  if (!sheet.id && !num(d.montant)) d.montant = num(c.montant);
+  if (!d.ref) d.compte = c.compte; // une ligne de relevé garde le compte du relevé
 }
 // Pendant qu'on tape la note (ou le libellé), la catégorie suit ce qui a déjà été rangé sous ce nom,
 // tant qu'on ne l'a pas choisie soi-même (une ligne déjà rangée à la main ne bouge pas).
@@ -924,7 +969,8 @@ function saveSheet() {
   const err = m => { const e = $("#sheetErr"); e.textContent = m; e.hidden = false; };
   if (kind === "depense") {
     if (!num(d.montant)) return err("Indiquez un montant.");
-    if (!d.enveloppe && !d.ref) return err("Choisissez une enveloppe.");
+    if (chargeOf(state(), d)) { d.enveloppe = ""; delete d.envAuto; } else delete d.charge;
+    if (!d.enveloppe && !d.ref && !d.charge) return err(state().charges.length ? "Choisissez une enveloppe ou une charge." : "Choisissez une enveloppe.");
     if (!id) { d.date = new Date().toISOString(); d.par = app.myName || ""; d.annee = state().annee; }
     if (d.compte) { d.par = comptePar(d.compte); if (!id && !d.ref) LS.set("bf:depCompte", d.compte); } // « par » suit le compte choisi
     else delete d.compte;
@@ -942,8 +988,8 @@ function saveSheet() {
   if (spread) toast(`${plural(spread, "ligne semblable")} rangée${spread > 1 ? "s" : ""} pareil`);
   if (!id && sheet.fromReport && report && report.added) { report.added.push({ id: nid, kind, manual: true }); refreshReport(); }
   if (kind === "depense" && !id) {
-    const env = state().enveloppes.find(e => e.id === d.enveloppe);
-    toast(`${eur2(d.montant)} ajoutés · ${env ? env.libelle : ""}`);
+    const S = state(), env = S.enveloppes.find(e => e.id === d.enveloppe), ch = chargeOf(S, d);
+    toast(`${eur2(d.montant)} ajoutés · ${ch ? "charge " + (ch.libelle || "") : env ? env.libelle : ""}`);
   }
   closeSheet();
 }
@@ -1030,7 +1076,7 @@ function searchEntries(S) {
     const y = Number(d.annee) || S.annee, m = Number(d.mois) || 1, dt = new Date(d.date);
     // le jour n'est fiable que si la date de saisie tombe bien dans le mois auquel la dépense est rattachée
     const day = !isNaN(dt) && dt.getFullYear() === y && dt.getMonth() + 1 === m ? dt.getDate() : 0;
-    const env = envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée");
+    const env = depLieu(S, d, envName);
     const c = depCompte(S, d), cpt = c ? compteCourt(c) : d.par;
     add({ k: "depense", id: d.id, montant, cat: depCat(S, d), y, m, day, titre: d.note || envName[d.enveloppe] || "Dépense", ctx: [env, day ? new Date(y, m - 1, day).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) : `${MOIS[m - 1]} ${y}`, cpt] }, [env, d.par, cpt, "compte"]);
   });
@@ -1131,6 +1177,10 @@ document.addEventListener("click", async e => {
     case "closeSearch": closeSearch(); break;
     case "closeReport": closeReport(); break;
     case "reportNew": openSheet("depense"); sheet.fromReport = true; break;
+    case "payCharge": { // depuis la fiche d'une charge : nouvelle dépense reliée, au montant prévu
+      const S = state(), c = S.charges.find(x => x.id === t.dataset.id); if (!c) break;
+      openSheet("depense", null, { charge: c.id, enveloppe: "", montant: num(c.montant), note: c.libelle || "", compte: c.compte, categorie: chargeCat(S, c) }); break;
+    }
     case "autoSort": {
       const S = state(), list = autoSortable(S, t.dataset.sens, period(S).ms);
       list.forEach(x => put(x.kind, x.id, { ...app.items.get(x.id).data, categorie: x.cat, catAuto: true }));
@@ -1146,6 +1196,7 @@ document.addEventListener("click", async e => {
     case "delCancel": sheet.confirmDel = false; renderSheet(); break;
     case "delConfirm": {
       const { kind, id } = sheet; del(kind, id);
+      if (kind === "charge") state().depenses.filter(x => x.charge === id).forEach(x => { const { charge, ...rest } = app.items.get(x.id).data; put("depense", x.id, rest); }); // ses paiements redeviennent des dépenses
       if (kind === "livret") state().provisions.filter(p => p.livret === id).forEach(p => { const it = app.items.get(p.id); put("provision", p.id, { ...it.data, livret: "" }); });
       closeSheet(); toast("Supprimé"); break;
     }
@@ -1175,6 +1226,7 @@ document.addEventListener("input", e => {
   if (el.dataset.f && sheet) {
     sheet.draft[el.dataset.f] = el.value;
     if (el.dataset.f === "categorie") sheet.draft._ct = true;
+    if (el.dataset.f === "charge" && sheet.kind === "depense") pickCharge();
     if (el.dataset.f === (sheet.kind === "depense" ? "note" : "libelle")) suggestCat();
     if (el.tagName === "SELECT" || (sheet.kind === "provision" && el.dataset.f === "montant")) {
       if (el.tagName === "SELECT") renderSheet();
@@ -1346,7 +1398,7 @@ function importState(src, opt = {}) {
   (src.provisions || []).forEach(p => put("provision", nid(p.id), { libelle: p.libelle, livret: p.livret ? nid(p.livret) : "", montant: num(p.montant), mois: Number(p.mois) || 1, ordre: o++ }));
   (src.enveloppes || []).forEach(e => put("enveloppe", nid(e.id), { libelle: e.libelle, prevu: num(e.prevu), ...(e.categorie ? { categorie: e.categorie } : {}), ordre: o++ }));
   if (Array.isArray(src.depenses)) {
-    src.depenses.forEach(d => put("depense", newId(), { enveloppe: nid(d.enveloppe), ...("categorie" in d ? { categorie: d.categorie } : {}), annee: Number(d.annee) || annee, mois: Number(d.mois) || 1, montant: num(d.montant), note: d.note || "", par: d.par || "", date: d.date || new Date().toISOString() }));
+    src.depenses.forEach(d => put("depense", newId(), { enveloppe: nid(d.enveloppe), ...(d.charge ? { charge: nid(d.charge) } : {}), ...("categorie" in d ? { categorie: d.categorie } : {}), annee: Number(d.annee) || annee, mois: Number(d.mois) || 1, montant: num(d.montant), note: d.note || "", par: d.par || "", date: d.date || new Date().toISOString() }));
   } else {
     (src.enveloppes || []).forEach(e => Object.entries(e.reel || {}).forEach(([m, v]) => {
       if (v === "" || v == null) return;
@@ -1523,14 +1575,14 @@ function spreadLike(kind, id, d, prev) {
     if (x.id === id || merchantKey(lineText(kind, x)) !== key) return;
     const patch = {}, cur = lineCat(S, kind, x);
     if (doCat && cur !== d.categorie && (!cur || x.catAuto)) Object.assign(patch, { categorie: d.categorie, catAuto: true });
-    if (doEnv && x.ref && x.enveloppe !== d.enveloppe && (!x.enveloppe || x.envAuto)) Object.assign(patch, { enveloppe: d.enveloppe, envAuto: true });
+    if (doEnv && x.ref && !x.charge && x.enveloppe !== d.enveloppe && (!x.enveloppe || x.envAuto)) Object.assign(patch, { enveloppe: d.enveloppe, envAuto: true });
     if (Object.keys(patch).length) { put(kind, x.id, { ...app.items.get(x.id).data, ...patch }); n++; }
   });
   return n;
 }
 // Dépenses importées de la période, encore sans enveloppe, que l'historique permet de ranger.
 function autoEnvable(S, ms) {
-  return S.depenses.filter(d => d.ref && !d.enveloppe && Number(d.annee) === Number(S.annee) && ms.includes(Number(d.mois)))
+  return S.depenses.filter(d => d.ref && !d.enveloppe && !chargeOf(S, d) && Number(d.annee) === Number(S.annee) && ms.includes(Number(d.mois)))
     .map(d => { const cat = depCat(S, d), env = autoEnv(S, d.note, cat); return { id: d.id, env, cat: cat || (env ? envCat(S, S.enveloppes.find(e => e.id === env)) : "") }; })
     .filter(x => x.env);
 }
@@ -1629,9 +1681,11 @@ function findDuplicates(S, ops, compte) {
     used.add(p.key); o.match = { kind: p.kind, id: p.id, how: "saisie" };
   });
 }
-function addOp(S, o, compte) {
+// charge : charge mensuelle dont l'opération est le paiement (dépense reliée, sans enveloppe)
+function addOp(S, o, compte, charge) {
   const id = newId(), dep = o.montant < 0, categorie = autoCat(S, o.libelle, "revenu"), auto = categorie ? { catAuto: true } : {};
-  if (dep) put("depense", id, { ...autoDep(S, o.libelle), annee: o.y, mois: o.m, montant: -o.montant, note: o.libelle, par: comptePar(compte), compte, date: o.date + "T12:00:00.000Z", ref: o.ref });
+  const link = charge ? { categorie: chargeCat(S, charge), enveloppe: "", charge: charge.id } : {};
+  if (dep) put("depense", id, { ...autoDep(S, o.libelle), ...link, annee: o.y, mois: o.m, montant: -o.montant, note: o.libelle, par: comptePar(compte), compte, date: o.date + "T12:00:00.000Z", ref: o.ref });
   else put("revenu", id, { libelle: o.libelle, personne: comptePersonne(compte), type: "Autre", categorie, ...auto, frequence: "Ponctuel", mois: o.m, montant: o.montant, ordre: Date.now(), ref: o.ref });
   return { id, kind: o.montant < 0 ? "depense" : "revenu" };
 }
@@ -1680,9 +1734,10 @@ async function importPdf(file) {
 }
 function reportAddAnyway(i) {
   const o = report && report.dups[i]; if (!o) return;
+  const S = state(), ch = o.match.how !== "ref" && o.match.kind === "charge" ? S.charges.find(c => c.id === o.match.id) : null;
   report.dups.splice(i, 1);
-  report.added.push(addOp(state(), { ...o, ref: o.match.how === "ref" ? `${o.ref}+${newId().slice(0, 4)}` : o.ref }, report.compte));
-  toast("Ligne ajoutée");
+  report.added.push(addOp(S, { ...o, ref: o.match.how === "ref" ? `${o.ref}+${newId().slice(0, 4)}` : o.ref }, report.compte, ch));
+  toast(ch ? `Ligne ajoutée, reliée à « ${ch.libelle || "la charge"} »` : "Ligne ajoutée");
 }
 // Ligne existante à laquelle une opération correspond.
 function matchInfo(S, m) {
@@ -1702,7 +1757,7 @@ function reportAddedRow(S, a) {
   const d = it.data, gone = it.deleted, dep = a.kind === "depense";
   const titre = dep ? d.note || "Dépense" : d.libelle || "Revenu";
   const cat = catMeta(S, dep ? depCat(S, d) : revenuCat(S, d));
-  const when = dep ? shortDate(d.date) : MOIS[(Number(d.mois) || 1) - 1], env = dep && S.enveloppes.find(e => e.id === d.enveloppe);
+  const when = dep ? shortDate(d.date) : MOIS[(Number(d.mois) || 1) - 1], ch = dep && chargeOf(S, d), env = dep && (ch ? { libelle: "Charge · " + (ch.libelle || "sans nom") } : S.enveloppes.find(e => e.id === d.enveloppe));
   const action = gone ? `<button type="button" class="btn line sm" data-rundo="${esc(a.id)}">Rétablir</button>`
     : `<button type="button" class="iconbtn sm" data-rdel="${esc(a.id)}" aria-label="Supprimer ${esc(titre)}">${ICON.trash}</button>`;
   return `<div class="row rrow${gone ? " gone" : ""}"><button type="button" class="rmain" ${gone ? "disabled" : `data-edit="${a.kind}" data-id="${esc(a.id)}"`}>${ico(cat, "sm")}<div class="main"><div class="t">${esc(titre)}</div><div class="s">${esc([when, cat.nom, env && env.libelle, dep && depCompte(S, d) ? compteCourt(depCompte(S, d)) : "", a.manual ? "saisie manuelle" : "", gone ? "supprimée" : ""].filter(Boolean).join(" · "))}</div></div><div class="amt ${dep ? "" : "pos"}">${dep ? "" : "+"}${eur2(d.montant)}</div></button>${action}</div>`;
@@ -1712,7 +1767,7 @@ function reportDupRow(S, o, i) {
   return `<div class="row rrow dup"><div class="rmain"><div class="main"><div class="t">${esc(o.libelle)}</div><div class="s">${opDate(o)} · relevé</div>
     ${mi.gone ? `<div class="rmatch">↳ ${esc(mi.titre)} · ${esc(mi.sub)}</div>` : `<button type="button" class="rmatch" data-edit="${o.match.kind}" data-id="${esc(o.match.id)}">↳ ${esc(mi.titre)} · ${esc(mi.sub)}</button>`}</div>
     <div class="amt ${o.montant > 0 ? "pos" : ""}">${o.montant > 0 ? "+" : ""}${eur2(Math.abs(o.montant))}</div></div>
-    <button type="button" class="btn ghost sm" data-radd="${i}">Ajouter quand même</button></div>`;
+    <button type="button" class="btn ghost sm" data-radd="${i}">${o.match.how !== "ref" && o.match.kind === "charge" && !mi.gone ? "Relier à la charge" : "Ajouter quand même"}</button></div>`;
 }
 function reportHTML(S) {
   if (report.loading) return `<section class="card"><p class="empty">Lecture du relevé…</p></section>`;
