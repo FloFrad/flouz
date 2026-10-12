@@ -420,9 +420,10 @@ function vHome(S) {
     ${up.length ? up.map(({ mm, p }) => `<div class="row"><div class="main"><div class="t">${esc(p.libelle)}</div><div class="s">${MOIS[mm - 1]} · ${esc(liv[p.livret]?.nom || "sans livret")}</div></div><div class="amt">${eur(p.montant)}</div></div>`).join("") : `<p class="empty">Rien de prévu.</p>`}
   </div></section>`;
 }
-function envRow(S, e, m) {
-  const r = reel(S, e.id, m), p = num(e.prevu) * (m ? 1 : 12), left = p - r, pct = p ? Math.min(r / p * 100, 100) : (r ? 100 : 0);
-  return `<button class="row" data-act="quick" data-env="${e.id}"><div class="main"><div class="t">${esc(e.libelle)}</div><div class="bar ${left < 0 ? "over" : ""}"><i style="width:${pct}%"></i></div></div><div class="amt ${left < 0 ? "neg" : ""}">${left < 0 ? "−" + eur(-left) : eur(left)}<small>${eur(r)} / ${eur(p)}</small></div></button>`;
+// fc : compte filtré (onglet Dépenses) ; le budget de l'enveloppe reste commun à tous les comptes.
+function envRow(S, e, m, fc = "all") {
+  const r = fc === "all" ? reel(S, e.id, m) : S.depenses.filter(d => d.enveloppe === e.id && Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m) && depCompte(S, d) === fc).reduce((a, d) => a + num(d.montant), 0), p = num(e.prevu) * (m ? 1 : 12), left = p - r, pct = p ? Math.min(r / p * 100, 100) : (r ? 100 : 0);
+  return `<button class="row" data-act="quick" data-env="${e.id}"${fc !== "all" ? ` data-pcompte="${esc(fc)}"` : ""}><div class="main"><div class="t">${esc(e.libelle)}</div><div class="bar ${left < 0 ? "over" : ""}"><i style="width:${pct}%"></i></div></div><div class="amt ${left < 0 ? "neg" : ""}">${left < 0 ? "−" + eur(-left) : eur(left)}<small>${eur(r)} / ${eur(p)}</small></div></button>`;
 }
 
 function vEnv(S) {
@@ -441,7 +442,7 @@ function vEnv(S) {
   ${monthsBar(S)}
   <div class="duo"><section class="card"><div class="label">Dépensé</div><div class="mid">${eur(reelF)}</div><div class="sub">${esc(quoi)}sur ${eur(c.envPrevu)} prévus</div></section>
   <section class="card"><div class="label">Reste</div><div class="mid ${resteF < 0 ? "neg" : ""}">${eur(resteF)}</div><div class="sub">${esc(quoi)}${m ? MOIS[m - 1].toLowerCase() + " " : "année "}${S.annee}</div></section></div>
-  <section class="card"><h2>Par enveloppe<small>touchez pour ajouter</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
+  <section class="card"><h2>Par enveloppe<small>${quoi ? esc(quoi.slice(0, -3)) : "touchez pour ajouter"}</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m, fc)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
   <section class="card"><h2>${m ? "Saisies du mois" : "Saisies de l'année"}<small>${deps.length} ligne${deps.length > 1 ? "s" : ""}${fc !== "all" && deps.length ? " · " + eur2(sumOf(deps.map(d => ({ montant: num(d.montant) })))) : ""}</small></h2>
   ${filtre}<div class="list">
     ${deps.length ? deps.map(d => `<button class="row" data-edit="depense" data-id="${d.id}">${ico(catMeta(S, depCat(S, d)), "sm")}<div class="main"><div class="t">${esc(d.note || envName[d.enveloppe] || "Dépense")}</div><div class="s">${esc(envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"))} · ${dfmt(d.date)}${compteBadge(S, d)}</div></div><div class="amt">${eur2(d.montant)}</div>${ICON.chev}</button>`).join("") : fc !== "all" && all.length ? `<p class="empty">Aucune dépense sur ${esc(fc === "Joint" ? "le compte joint" : "le compte de " + fc.slice(6))} pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}.</p>` : `<p class="empty">Aucune dépense saisie pour ${m ? MOIS[m - 1].toLowerCase() : S.annee}. Utilisez le bouton +.</p>`}
@@ -1076,7 +1077,7 @@ document.addEventListener("click", async e => {
   if (t.dataset.new) { openSheet(t.dataset.new, null, t.dataset.sens ? { sens: t.dataset.sens } : {}); return; }
   const a = t.dataset.act;
   switch (a) {
-    case "quick": openSheet("depense", null, t.dataset.env ? { enveloppe: t.dataset.env } : {}); break;
+    case "quick": openSheet("depense", null, { ...(t.dataset.env ? { enveloppe: t.dataset.env } : {}), ...(t.dataset.pcompte ? { compte: t.dataset.pcompte } : {}) }); break; // filtre actif : la saisie part sur ce compte
     case "closeSheet": closeSheet(); break;
     case "openSearch": openSearch(); break;
     case "closeSearch": closeSearch(); break;
