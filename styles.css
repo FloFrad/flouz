@@ -234,6 +234,19 @@ body::before{content:"";position:fixed;top:0;left:0;right:0;height:var(--sat);z-
 .chips.ex button{font-weight:500}
 .spanel code{font:600 12.5px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--surface-2);border-radius:6px;padding:1px 5px;white-space:nowrap}
 
+/* ---------- rapport d'import du relevé ---------- */
+#report:empty{display:none}
+.rtitle{flex:1;margin:0;font-size:26px;font-weight:800;letter-spacing:-.02em}
+.rrow{gap:8px;flex-wrap:wrap}
+.rmain{flex:1;min-width:0;display:flex;align-items:center;gap:12px;text-align:left}
+.rrow .iconbtn svg{width:18px;height:18px;color:var(--neg)}
+.rrow.gone .rmain{opacity:.45}
+.rrow.gone .t{text-decoration:line-through}
+.rrow.dup .rmain{flex-basis:100%}
+.rrow.dup .btn{margin-left:auto}
+.rmatch{display:block;font-size:13px;color:var(--accent);font-weight:600;text-align:left;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+div.rmatch{color:var(--muted)}
+
 /* ---------- tab bar ---------- */
 .tabbar{position:fixed;left:max(14px,env(safe-area-inset-left,0px));right:max(14px,env(safe-area-inset-right,0px));bottom:calc(10px + var(--sab));z-index:20;background:var(--surface);border-radius:30px;box-shadow:var(--tab-edge,0 0 0 0 transparent),0 10px 30px rgba(30,40,80,.16);padding:6px 6px 8px;display:grid;grid-template-columns:repeat(6,1fr);align-items:end;max-width:560px;margin:0 auto}
 .tabbar button{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10.5px;font-weight:800;color:var(--muted);padding:4px 0}
