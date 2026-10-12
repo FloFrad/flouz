@@ -735,6 +735,12 @@ function vSettings(S) {
     <label class="field"><span>Répartition du compte joint</span><select id="s-rep" data-setting="repartition"><option value="prorata" ${S.repartition !== "egal" ? "selected" : ""}>Au prorata des salaires</option><option value="egal" ${S.repartition === "egal" ? "selected" : ""}>50 / 50</option></select></label>
     <label class="field"><span>Épargne commune programmée / mois</span><div class="euro"><input id="s-ep" type="text" inputmode="decimal" value="${esc(S.epargneCommune || "")}" data-setting="epargneCommune"></div></label>
   </div></section>
+  <section class="card"><h2>Compléter les enveloppes<small>${S.annee}</small></h2>
+    <p class="note" style="margin-top:0">Ajoute, pour chaque mois choisi, une dépense « Complément » dans chaque enveloppe pour qu'elle soit consommée à 100 %. Ce qui est déjà saisi est déduit : relancer ne fait pas de doublon.</p>
+    <div class="two"><label class="field"><span>De</span><select id="fill-from">${MOIS.map((n, i) => `<option value="${i + 1}" ${i === 0 ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+    <label class="field"><span>À</span><select id="fill-to">${MOIS.map((n, i) => `<option value="${i + 1}" ${i === 7 ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
+    <div class="btnrow" style="margin-top:8px" id="fillZone"><button class="btn ghost" data-act="askFill">Compléter à 100 %</button></div>
+  </section>
   <section class="card"><h2>Relevé de compte</h2>
     <p class="note" style="margin-top:0">Importez le relevé PDF de la banque : les débits deviennent des dépenses, les crédits des revenus, et ce qui est déjà saisi n'est pas ajouté. Le fichier est lu sur ce téléphone : il n'est ni envoyé, ni conservé.</p>
     ${pdfButton("ghost")}
@@ -890,6 +896,25 @@ function saveSheet() {
     toast(`${eur2(d.montant)} ajoutés · ${env ? env.libelle : ""}`);
   }
   closeSheet();
+}
+
+/* ====================== Compléter les enveloppes ====================== */
+// Pour chaque mois de la période et chaque enveloppe, ce qu'il manque pour atteindre le budget prévu.
+function fillPlan(S, from, to) {
+  const a = Math.min(from, to), b = Math.max(from, to), plan = [];
+  for (let m = a; m <= b; m++) S.enveloppes.forEach(e => {
+    const manque = Math.round((num(e.prevu) - reel(S, e.id, m)) * 100) / 100;
+    if (manque > 0) plan.push({ env: e, mois: m, montant: manque });
+  });
+  return plan;
+}
+function fillEnvelopes(from, to) {
+  const S = state(), plan = fillPlan(S, from, to);
+  plan.forEach(({ env, mois, montant }, i) => put("depense", newId(), {
+    enveloppe: env.id, montant, mois, annee: S.annee, categorie: envCat(S, env), note: "Complément " + env.libelle,
+    date: new Date(Number(S.annee), mois, 0, 12).toISOString(), par: app.myName || "", ordre: Date.now() + i
+  }));
+  return plan.length;
 }
 
 /* ====================== Recherche ====================== */
@@ -1085,6 +1110,20 @@ document.addEventListener("click", async e => {
       const zone = t.closest(".btnrow");
       zone.innerHTML = `<span style="flex-basis:100%;font-size:14px">Effacer revenus, charges, provisions, enveloppes, livrets et dépenses ? (Les catégories sont conservées.)</span><button class="btn danger" data-act="clear">Oui, tout vider</button><button class="btn line" data-act="cancelClear">Annuler</button>`;
       break;
+    }
+    case "askFill": {
+      const from = Number($("#fill-from").value), to = Number($("#fill-to").value);
+      const plan = fillPlan(state(), from, to);
+      const zone = t.closest(".btnrow");
+      if (!plan.length) { zone.insertAdjacentHTML("afterbegin", `<span style="flex-basis:100%;font-size:14px">Rien à compléter : les enveloppes sont déjà à 100 % sur cette période.</span>`); break; }
+      const tot = plan.reduce((a, x) => a + x.montant, 0);
+      zone.innerHTML = `<span style="flex-basis:100%;font-size:14px">Ajouter ${plan.length} dépense${plan.length > 1 ? "s" : ""} pour ${eur2(tot)} (${MOIS[Math.min(from, to) - 1].toLowerCase()} → ${MOIS[Math.max(from, to) - 1].toLowerCase()} ${state().annee}) ?</span><button class="btn" data-act="fill" data-from="${from}" data-to="${to}">Oui, compléter</button><button class="btn line" data-act="cancelClear">Annuler</button>`;
+      break;
+    }
+    case "fill": {
+      const n = fillEnvelopes(Number(t.dataset.from), Number(t.dataset.to));
+      toast(n ? `${n} complément${n > 1 ? "s" : ""} ajouté${n > 1 ? "s" : ""}` : "Rien à compléter");
+      render(); break;
     }
     case "cancelClear": render(); break;
     case "clear": clearAll(); setSettings({ exemple: false }); toast("Budget vidé"); break;

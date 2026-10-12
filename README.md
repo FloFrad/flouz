@@ -12,6 +12,7 @@ Elle fonctionne aussi hors ligne : ce que vous saisissez part dès que le résea
 - **Recherche** : la loupe en haut de **Accueil** et de **Dépenses** ouvre une recherche sur toutes les saisies, revenus et charges. Tapez plusieurs mots (ils doivent tous correspondre) : un libellé, une enveloppe, une catégorie, une personne, un montant (`45`, `45,50`, `>100`, `<20`, `50..120`) ou une date (`mars`, `2026`, `12/03/2026`, `03/2026`, `>=01/03/2026`, `01/03..15/03`). Touchez un résultat pour le modifier.
 - **Analyse** : pour le mois (ou toute l'année), la balance entrées / sorties, un anneau des dépenses (ou des revenus) par catégorie, le budget consommé, les récurrences. Touchez une catégorie pour voir ses lignes.
 - **Budget** : revenus, charges mensuelles, dépenses annuelles à provisionner, enveloppes, et **Catégories** (créer, renommer, choisir icône et couleur, supprimer).
+- **Compléter les enveloppes** (Réglages) : choisissez une période (par défaut janvier → août) ; chaque enveloppe reçoit, pour chaque mois, une dépense « Complément » égale à ce qui manque pour atteindre 100 % de son budget. Relancer ne crée pas de doublon.
 - **Livrets** : solde projeté de chaque livret mois par mois (alerte s'il manquera de l'argent), virements de chacun vers le compte joint, mois type.
 
 Installation : environ 20 minutes, une seule fois.
