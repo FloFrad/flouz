@@ -276,8 +276,32 @@ function chargePaid(S) {
 const depLieu = (S, d, envName) => { const c = chargeOf(S, d); return c ? "Charge · " + (c.libelle || "sans nom") : envName[d.enveloppe] || (d.ref ? "Relevé bancaire" : "Enveloppe supprimée"); };
 // Montant d'une charge pour un mois : le paiement relié s'il y en a un, sinon le montant prévu.
 const chargeMonth = (S, c, m) => { const p = chargePaid(S).get(`${c.id}:${m}`); return p ? p.montant : num(c.montant); };
+/* Revenu ponctuel relié à un revenu mensuel (r.revenu) : c'est le versement réel (ex. le salaire du relevé).
+ * Ce mois-là, il remplace le montant prévu du revenu mensuel au lieu de s'y ajouter. */
+const revenuOf = (S, r) => (r.revenu && r.frequence !== "Mensuel" && S.revenus.find(x => x.id === r.revenu && x.frequence === "Mensuel")) || null;
+const recuCache = new WeakMap();
+// Versements reliés : « idRevenu:mois » → { montant, n }
+function revenuRecu(S) {
+  let P = recuCache.get(S);
+  if (P) return P;
+  P = new Map();
+  S.revenus.forEach(r => {
+    if (!revenuOf(S, r)) return;
+    const k = `${r.revenu}:${Number(r.mois) || 1}`, e = P.get(k) || { montant: 0, n: 0 };
+    e.montant += num(r.montant); e.n++; P.set(k, e);
+  });
+  recuCache.set(S, P);
+  return P;
+}
+/* Dépense annuelle (provision) pointée « payée » cette année : p.paye = { annee, mois, montant }.
+ * Elle sort du livret le mois du paiement (montant payé) et ne compte plus dans la mise de côté des mois suivants. */
+const provPaye = (S, p) => (p.paye && Number(p.paye.annee) === Number(S.annee) && Number(p.paye.mois) >= 1 ? { mois: Number(p.paye.mois), montant: num(p.paye.montant) || num(p.montant) } : null);
+const provMonth = (S, p, m) => { const pp = provPaye(S, p); return pp && m > pp.mois ? 0 : num(p.montant) / 12; };
+const provTotal = (S, ms) => ms.reduce((a, m) => a + S.provisions.reduce((b, p) => b + provMonth(S, p, m), 0), 0);
+// Mois en cours si l'année du budget est l'année en cours (0 si elle est passée ou à venir : rien n'est « en retard »).
+const curMonth = S => (Number(S.annee) === new Date().getFullYear() ? new Date().getMonth() + 1 : Number(S.annee) < new Date().getFullYear() ? 12 : 0);
 // Une saisie garde sa catégorie ; les anciennes (sans choix) prennent celle de leur enveloppe.
-const depCat = (S, d) => "categorie" in d ? resolveCat(S, d.categorie, "depense") : envCat(S, S.enveloppes.find(e => e.id === d.enveloppe));
+const depCat =(S, d) => "categorie" in d ? resolveCat(S, d.categorie, "depense") : envCat(S, S.enveloppes.find(e => e.id === d.enveloppe));
 
 /* Entrées et sorties d'une période (un mois, ou toute l'année si ms = 12 mois). */
 function flows(S, ms) {
@@ -294,9 +318,11 @@ function flows(S, ms) {
     out.push({ k: "charge", id: c.id, montant, cat: chargeCat(S, c), fixe: true, titre: c.libelle || "Charge", sub: (ms.length > 1 ? "Charge mensuelle · 12 mois" : "Charge mensuelle") + paid });
   });
   S.revenus.forEach(r => {
+    if (revenuOf(S, r)) return; // versement d'un revenu mensuel : compté avec lui
     const mensuel = r.frequence === "Mensuel";
-    const v = mensuel ? num(r.montant) * ms.length : (ms.includes(Number(r.mois)) ? num(r.montant) : 0);
-    if (v) inn.push({ k: "revenu", id: r.id, montant: v, cat: revenuCat(S, r), fixe: mensuel, titre: r.libelle || "Revenu", sub: `${personneNom(r.personne)} · ${mensuel ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]}` });
+    const v = ms.reduce((a, m) => a + revMonth(S, r, m), 0), nRecu = mensuel ? ms.filter(m => revenuRecu(S).has(`${r.id}:${m}`)).length : 0;
+    const recu = nRecu ? (ms.length > 1 ? ` · ${nRecu} reçu${nRecu > 1 ? "s" : ""}` : " · reçu") : "";
+    if (v) inn.push({ k: "revenu", id: r.id, montant: v, cat: revenuCat(S, r), fixe: mensuel, titre: r.libelle || "Revenu", sub: `${personneNom(r.personne)} · ${mensuel ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]}${recu}` });
   });
   (S.virements || []).forEach(v => (v.sens === "in" ? inn : out).push({ k: "virement", id: v.id, montant: v.montant * ms.length, cat: "_vir", fixe: true, titre: v.titre, sub: ms.length > 1 ? "Virement mensuel · 12 mois" : "Virement mensuel" }));
   return { out, inn };
@@ -306,31 +332,39 @@ function shortDate(d) { try { return new Date(d).toLocaleDateString("fr-FR", { d
 
 /* m = 0 → toute l'année */
 function reel(S, envId, m) { return S.depenses.filter(d => d.enveloppe === envId && Number(d.annee) === Number(S.annee) && (m === 0 || Number(d.mois) === m)).reduce((a, d) => a + num(d.montant), 0); }
-function revMonth(r, m) { return r.frequence === "Mensuel" ? num(r.montant) : (Number(r.mois) === m ? num(r.montant) : 0); }
+// Revenu d'un mois : un revenu mensuel vaut son versement relié s'il y en a un (sinon le montant prévu) ; un versement relié compte avec lui.
+function revMonth(S, r, m) {
+  if (r.frequence === "Mensuel") { const p = revenuRecu(S).get(`${r.id}:${m}`); return p ? p.montant : num(r.montant); }
+  return !revenuOf(S, r) && Number(r.mois) === m ? num(r.montant) : 0;
+}
 function calc(S, m) {
   if (m === 0) {
     const cs = Array.from({ length: 12 }, (_, i) => calc(S, i + 1));
     const sum = k => cs.reduce((a, c) => a + c[k], 0);
-    return { revenus: sum("revenus"), revReg: sum("revReg"), charges: sum("charges"), provisions: sum("provisions"), envPrevu: sum("envPrevu"), envReel: sum("envReel"),
+    return { revenus: sum("revenus"), revReg: sum("revReg"), revPonct: sum("revPonct"), charges: sum("charges"), provisions: sum("provisions"), envPrevu: sum("envPrevu"), envReel: sum("envReel"),
       env: sum("env"), rav: sum("rav"), epargne: sum("epargne"), resteEnv: sum("resteEnv") };
   }
   const vir = sens => (S.virements || []).filter(v => v.sens === sens).reduce((a, v) => a + v.montant, 0); // vue d'un compte (forCompte)
-  const revenus = S.revenus.reduce((a, r) => a + revMonth(r, m), 0) + vir("in");
+  const revenus = S.revenus.reduce((a, r) => a + revMonth(S, r, m), 0) + vir("in");
   const revReg = S.revenus.filter(r => r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0) + vir("in");
+  const revPonct = S.revenus.filter(r => r.frequence !== "Mensuel").reduce((a, r) => a + revMonth(S, r, m), 0);
   const charges = S.charges.reduce((a, c) => a + chargeMonth(S, c, m), 0) + vir("out");
-  const provisions = S.provisions.reduce((a, p) => a + num(p.montant) / 12, 0);
+  const provisions = S.provisions.reduce((a, p) => a + provMonth(S, p, m), 0);
   const envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
   const envReel = S.enveloppes.reduce((a, e) => a + reel(S, e.id, m), 0);
   const rav = revenus - charges - provisions;
   const epargne = rav - Math.max(envPrevu, envReel);
-  return { revenus, revReg, charges, provisions, envPrevu, envReel, env: Math.max(envPrevu, envReel), rav, epargne, resteEnv: envPrevu - envReel };
+  return { revenus, revReg, revPonct, charges, provisions, envPrevu, envReel, env: Math.max(envPrevu, envReel), rav, epargne, resteEnv: envPrevu - envReel };
 }
+// Solde du livret mois par mois : + la mise de côté du mois, − les dépenses annuelles du mois (au mois et au montant payés si elles sont pointées).
 function livretStats(S, l) {
-  const mens = S.provisions.filter(p => p.livret === l.id).reduce((a, p) => a + num(p.montant) / 12, 0);
+  const ps = S.provisions.filter(p => p.livret === l.id);
+  const mensM = ALL_MONTHS.map(m => ps.reduce((a, p) => a + provMonth(S, p, m), 0));
+  const sortie = (p, m) => { const pp = provPaye(S, p); return pp ? (pp.mois === m ? pp.montant : 0) : (Number(p.mois) === m ? num(p.montant) : 0); };
   const soldes = []; let s = num(l.solde);
-  for (let m = 1; m <= 12; m++) { s += mens; s -= S.provisions.filter(p => p.livret === l.id && Number(p.mois) === m).reduce((a, p) => a + num(p.montant), 0); soldes.push(s); }
+  for (let m = 1; m <= 12; m++) { s += mensM[m - 1]; s -= ps.reduce((a, p) => a + sortie(p, m), 0); soldes.push(s); }
   const bas = Math.min(...soldes);
-  return { mens, soldes, bas, moisBas: soldes.indexOf(bas) + 1 };
+  return { mensM, soldes, bas, moisBas: soldes.indexOf(bas) + 1 };
 }
 function joint(S) {
   const ch = S.charges.filter(c => c.compte === "Joint").reduce((a, c) => a + num(c.montant), 0);
@@ -366,6 +400,7 @@ function render() {
   if (sel && !render._scrolled) { sel.scrollIntoView({ inline: "center", block: "nearest" }); render._scrolled = true; }
   if (search) refreshSearch(); // une ligne modifiée depuis les résultats les met à jour
   if (report) refreshReport();
+  if (tool) refreshTool();
 }
 const GEAR_BTN = `<button class="iconbtn" data-tab="settings" aria-label="Réglages">${ICON.gear}</button>`;
 const SEARCH_BTN = `<button class="iconbtn" data-act="openSearch" aria-label="Rechercher">${ICON.search}</button>`;
@@ -435,11 +470,12 @@ function vHome(S0) {
   ${monthsBar(S)}
   ${compteFilter(S0, fc)}
   ${exampleBanner(S0)}
-  <section class="card hero"><div class="label">Épargne possible${fc === "all" ? "" : " · " + esc(fc === "Joint" ? "compte joint" : fc.slice(6))}</div><div class="big">${eur(c.epargne)}</div><div class="sub">${c.revenus > 0 ? Math.round(c.epargne / c.revenus * 100) : 0} % des revenus ${per}${c.revenus > c.revReg ? " · prime incluse" : ""}</div></section>
+  <section class="card hero"><div class="label">Épargne possible${fc === "all" ? "" : " · " + esc(fc === "Joint" ? "compte joint" : fc.slice(6))}</div><div class="big">${eur(c.epargne)}</div><div class="sub">${c.revenus > 0 ? Math.round(c.epargne / c.revenus * 100) : 0} % des revenus ${per}${c.revPonct > 0 ? " · prime incluse" : ""}</div></section>
   <div class="duo">
     <section class="card"><div class="label"><span class="sw" style="background:var(--c-prov)"></span>De côté</div><div class="mid">${eur(c.provisions)}</div><div class="sub">${m ? "à virer sur les livrets" : "virés sur les livrets"}</div></section>
     <section class="card" data-tab="env" role="button"><div class="label"><span class="sw" style="background:var(--c-env)"></span>Reste</div><div class="mid ${resteEnv < 0 ? "neg" : ""}">${eur(resteEnv)}</div><div class="sub">${eur(c.envReel)} sur ${eur(envPrevu)}</div></section>
   </div>
+  ${toolNudges(S0, m)}
   ${m ? "" : yearChart(S) + savingsChart(S)}
   <section class="card"><h2>Où vont les ${eur(c.revenus)}<small>reste à vivre ${eur(c.rav)}</small></h2>
     <div class="flow">${segs.map(([n, v, col]) => `<div style="width:${(v / tot * 100).toFixed(2)}%;background:var(${col})" title="${n}"></div>`).join("")}</div>
@@ -449,8 +485,22 @@ function vHome(S0) {
     ${S0.enveloppes.length ? S0.enveloppes.map(e => envRow(S0, e, m, fc)).join("") : `<p class="empty">Aucune enveloppe. Ajoutez-en dans Budget.</p>`}
   </div></section>
   <section class="card"><h2>${m ? "Prochaines échéances" : "Échéances de l'année"}<small>${m ? "3 mois" : "12 mois"}</small></h2><div class="list">
-    ${up.length ? up.map(({ mm, p }) => `<div class="row"><div class="main"><div class="t">${esc(p.libelle)}</div><div class="s">${MOIS[mm - 1]} · ${esc(liv[p.livret]?.nom || "sans livret")}</div></div><div class="amt">${eur(p.montant)}</div></div>`).join("") : `<p class="empty">Rien de prévu.</p>`}
+    ${up.length ? up.map(({ mm, p }) => echeanceRow(S, p, mm, liv)).join("") : `<p class="empty">Rien de prévu.</p>`}
   </div></section>`;
+}
+// Échéance d'une dépense annuelle : touchez pour la modifier, « Payée » pour la pointer.
+function echeanceRow(S, p, mm, liv) {
+  const pp = provPaye(S, p), late = !pp && mm <= curMonth(S);
+  const etat = pp ? `<span class="pill ok">Payée${pp.mois !== mm ? " en " + MC[pp.mois - 1].toLowerCase() : ""}</span>` : `<button type="button" class="btn ${late ? "" : "ghost"} sm" data-act="provPaid" data-id="${esc(p.id)}">Payée</button>`;
+  return `<div class="row rrow"><button type="button" class="rmain" data-edit="provision" data-id="${esc(p.id)}"><div class="main"><div class="t">${esc(p.libelle)}</div><div class="s">${MOIS[mm - 1]} · ${esc(liv[p.livret]?.nom || "sans livret")}${late ? " · à pointer" : ""}</div></div><div class="amt">${eur(pp ? pp.montant : p.montant)}</div></button>${etat}</div>`;
+}
+// Raccourcis vers les pages « À catégoriser » et « Pointage » quand il y a du travail (tout le foyer, sans le filtre par compte).
+function toolNudges(S, m, triOnly) {
+  const card = (act, icone, couleur, titre, sous) => `<button class="card nudge" data-act="${act}"><span class="ico sm" style="background:${couleur}">${icone}</span><span class="main"><b>${titre}</b><small>${sous}</small></span>${ICON.chev}</button>`;
+  const n = triEntries(S).length;
+  const mp = m || curMonth(S), todo = !triOnly && mp && mp <= curMonth(S) ? pointItems(S, mp).filter(x => !x.done).length : 0;
+  return (n ? card("openTri", UNCAT.icone, UNCAT.couleur, `${plural(n, "ligne")} à catégoriser`, "Rangez-les d'un toucher") : "")
+    + (todo ? card("openPoint", "✅", "#0E8A6D", `Pointage de ${MOIS[mp - 1].toLowerCase()} : ${todo} à pointer`, "Retrouvez les transactions des revenus, charges et dépenses annuelles") : "");
 }
 // fc : compte filtré (onglet Dépenses) ; le budget de l'enveloppe reste commun à tous les comptes.
 function envRow(S, e, m, fc = "all") {
@@ -472,6 +522,7 @@ function vEnv(S) {
   const filtre = compteFilter(S, fc);
   return `${head("Dépenses", SEARCH_BTN + GEAR_BTN)}
   ${monthsBar(S)}
+  ${toolNudges(S, m, true)}
   <div class="duo"><section class="card"><div class="label">Dépensé</div><div class="mid">${eur(reelF)}</div><div class="sub">${esc(quoi)}sur ${eur(c.envPrevu)} prévus</div></section>
   <section class="card"><div class="label">Reste</div><div class="mid ${resteF < 0 ? "neg" : ""}">${eur(resteF)}</div><div class="sub">${esc(quoi)}${m ? MOIS[m - 1].toLowerCase() + " " : "année "}${S.annee}</div></section></div>
   <section class="card"><h2>Par enveloppe<small>${quoi ? esc(quoi.slice(0, -3)) : "touchez pour ajouter"}</small></h2><div class="list">${S.enveloppes.map(e => envRow(S, e, m, fc)).join("") || `<p class="empty">Aucune enveloppe.</p>`}</div></section>
@@ -504,9 +555,9 @@ function vBudget(S) {
   const L = { revenu: S.revenus, charge: S.charges, provision: S.provisions, enveloppe: S.enveloppes }[seg] || [];
   const liv = Object.fromEntries(S.livrets.map(l => [l.id, l.nom]));
   const rowOf = {
-    revenu: r => [r.libelle, `${personneNom(r.personne)} · ${r.frequence === "Mensuel" ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]} · ${catMeta(S, revenuCat(S, r)).nom}`, eur(r.montant), r.frequence === "Mensuel" ? "/ mois" : "ponctuel"],
+    revenu: r => { const rm = revenuOf(S, r); return [r.libelle, `${personneNom(r.personne)} · ${r.frequence === "Mensuel" ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]} · ${rm ? "versement de « " + (rm.libelle || "revenu mensuel") + " »" : catMeta(S, revenuCat(S, r)).nom}`, eur(r.montant), r.frequence === "Mensuel" ? "/ mois" : rm ? "reçu" : "ponctuel"]; },
     charge: c => [c.libelle, `${catMeta(S, chargeCat(S, c)).nom} · ${compteNom(c.compte)}`, eur(c.montant), "/ mois"],
-    provision: p => [p.libelle, `${MOIS[(Number(p.mois) || 1) - 1]} · ${liv[p.livret] || "sans livret"}`, eur(num(p.montant) / 12), `/ mois · ${eur(p.montant)} an`],
+    provision: p => { const pp = provPaye(S, p), late = !pp && Number(p.mois) <= curMonth(S); return [p.libelle, `${MOIS[(Number(p.mois) || 1) - 1]} · ${liv[p.livret] || "sans livret"}${pp ? ` · payée en ${MOIS[pp.mois - 1].toLowerCase()}` : late ? " · à pointer" : ""}`, eur(num(p.montant) / 12), `/ mois · ${eur(p.montant)} an`]; },
     enveloppe: e => [e.libelle, `budget mensuel · ${catMeta(S, envCat(S, e)).nom}`, eur(e.prevu), "/ mois"]
   }[seg];
   const total = {
@@ -602,7 +653,7 @@ function vAnalyse(S0) {
     <div class="aseg" role="group" aria-label="Type d'analyse"><button class="ov" data-aseg="all" aria-pressed="${seg === "all"}" aria-label="Vue d'ensemble">${ICON.grid}</button>${segBtn("entrees", "Entrées")}${segBtn("sorties", "Sorties")}${segBtn("rec", "Récurrences")}</div>
     ${compteFilter(S0, fc)}</section>`;
   const todo = out.filter(x => !x.cat).length + inn.filter(x => !x.cat).length;
-  const nudge = todo ? `<button class="card nudge" data-aseg="${out.some(x => !x.cat) ? "sorties" : "entrees"}"><span class="ico sm" style="background:${UNCAT.couleur}">${UNCAT.icone}</span><span class="main"><b>${plural(todo, "ligne")} à catégoriser</b><small>Touchez pour les ranger</small></span>${ICON.chev}</button>` : "";
+  const nudge = todo ? `<button class="card nudge" data-act="openTri"><span class="ico sm" style="background:${UNCAT.couleur}">${UNCAT.icone}</span><span class="main"><b>${plural(todo, "ligne")} à catégoriser</b><small>Touchez pour les ranger</small></span>${ICON.chev}</button>` : "";
   let body;
   if (seg === "all") body = vOverview(S, per, out, totIn, totOut) + evolution(S, "all") + nudge;
   else if (seg === "rec") body = vRec(S, per);
@@ -661,7 +712,7 @@ function vOverview(S, per, out, totIn, totOut) {
   const n = per.ms.length, bal = totIn - totOut;
   const chFix = S.charges.reduce((a, c) => a + num(c.montant), 0) + virOut(S), envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
   const budget = (chFix + envPrevu) * n, left = budget - totOut;
-  const prov = S.provisions.reduce((a, p) => a + num(p.montant) / 12, 0) * n;
+  const prov = provTotal(S, per.ms);
   const objectif = totIn - budget - prov, reelEp = totIn - totOut - prov;
   const mx = Math.max(totIn, totOut, 1), h = v => Math.max(Math.round(v / mx * 150), 26);
   return `<section class="card"><div class="label">Balance</div>
@@ -718,18 +769,20 @@ function autoEnvButton(S, m) {
 function autoSortNote(S, sens, ms, open) {
   const n = open ? autoSortable(S, sens, ms).length : 0;
   return (n ? `<button class="btn block sm" data-act="autoSort" data-sens="${sens}">Ranger ${plural(n, "ligne")} d'après l'historique</button>` : "")
+    + `<button class="btn line block sm" data-act="openTri">Ouvrir la page « À catégoriser »</button>`
     + `<p class="note" style="margin:0">Touchez une ligne, puis choisissez sa catégorie${n ? " ; les lignes semblables suivront" : ""}.</p>`;
 }
 function vRec(S, per) {
   const n = per.ms.length, sfx = per.all ? "sur l'année" : "par mois";
   const rev = S.revenus.filter(r => r.frequence === "Mensuel").map(r => ({ k: "revenu", id: r.id, titre: r.libelle, montant: num(r.montant) * n, meta: catMeta(S, revenuCat(S, r)), sub: personneNom(r.personne) }));
   const ch = S.charges.map(c => ({ k: "charge", id: c.id, titre: c.libelle, montant: num(c.montant) * n, meta: catMeta(S, chargeCat(S, c)), sub: compteNom(c.compte) }));
-  const pr = S.provisions.map(p => ({ k: "provision", id: p.id, titre: p.libelle, montant: num(p.montant) / 12 * n, meta: { icone: "🐷", couleur: "#C28316" }, sub: `${MOIS[(Number(p.mois) || 1) - 1]} · ${eur(p.montant)} / an` }));
+  const pr = S.provisions.map(p => { const pp = provPaye(S, p); return { k: "provision", id: p.id, titre: p.libelle, montant: per.ms.reduce((a, m) => a + provMonth(S, p, m), 0), meta: { icone: "🐷", couleur: "#C28316" }, sub: `${MOIS[(Number(p.mois) || 1) - 1]} · ${eur(p.montant)} / an${pp ? ` · payée en ${MOIS[pp.mois - 1].toLowerCase()}` : ""}` }; });
   (S.virements || []).forEach(v => (v.sens === "in" ? rev : ch).push({ k: "virement", id: v.id, titre: v.titre, montant: v.montant * n, meta: catMeta(S, "_vir"), sub: "virement mensuel" }));
   const T = L => sumOf(L);
   const block = (title, L) => `<section class="card"><h2>${title}<small>${eurc(T(L))}</small></h2><div class="list">${[...L].sort((a, b) => b.montant - a.montant).map(it => `<button class="row" ${editAttr(it)}>${ico(it.meta, "sm")}<div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc([it.sub, it.meta.nom].filter(Boolean).join(" · "))}</div></div><div class="amt">${eurc(it.montant)}</div></button>`).join("") || `<p class="empty">Rien pour l'instant.</p>`}</div></section>`;
   const reste = T(rev) - T(ch) - T(pr);
-  return `<section class="card"><h2>Récurrences<small>${sfx}</small></h2>
+  return `<button class="card nudge" data-act="openPoint"><span class="ico sm" style="background:#0E8A6D">✅</span><span class="main"><b>Pointage ${per.all ? "du mois" : "de " + MOIS[app.month - 1].toLowerCase()}</b><small>Retrouvez la transaction de chaque revenu, charge et dépense annuelle</small></span>${ICON.chev}</button>
+  <section class="card"><h2>Récurrences<small>${sfx}</small></h2>
     <div class="kv"><span>Revenus réguliers</span><b>${eurc(T(rev))}</b></div>
     <div class="kv"><span>− Charges fixes</span><b>${eurc(T(ch))}</b></div>
     <div class="kv"><span>− De côté (livrets)</span><b>${eurc(T(pr))}</b></div>
@@ -748,15 +801,15 @@ function spark(vals, m) {
 function vLivrets(S) {
   const m = app.month, j = joint(S), c0 = calc(S, 1), mi = m || 12;
   const anyNeg = S.livrets.some(l => livretStats(S, l).bas < 0);
-  const regC = { rev: c0.revReg, ch: S.charges.reduce((a, c) => a + num(c.montant), 0), pr: c0.provisions, en: c0.envPrevu }; // montants prévus, sans les paiements reliés
+  const regC = { rev: c0.revReg, ch: S.charges.reduce((a, c) => a + num(c.montant), 0), pr: S.provisions.reduce((a, p) => a + num(p.montant) / 12, 0), en: c0.envPrevu }; // montants prévus, sans les paiements reliés ni les provisions pointées
   const ep = regC.rev - regC.ch - regC.pr - regC.en;
   return `${head("Livrets")}
   ${monthsBar(S)}
   <section class="card"><h2>Livrets de provisions<small>fin ${m ? MOIS[m - 1].toLowerCase() : "d'année"}</small></h2><div class="list">
-    ${S.livrets.map(l => { const st = livretStats(S, l), cur = st.soldes[mi - 1]; return `<button class="row" data-edit="livret" data-id="${l.id}"><div class="main"><div class="t">${esc(l.nom)}</div><div class="s">${eur(st.mens)} / mois · point bas ${eur(st.bas)} (${MC[st.moisBas - 1]})</div><div style="margin-top:4px">${st.bas < 0 ? `<span class="pill neg">Manque ${eur(-st.bas)}</span>` : `<span class="pill ok">OK sur l'année</span>`}</div></div><div class="amt"><span class="${cur < 0 ? "neg" : ""}">${eur(cur)}</span>${spark(st.soldes, mi)}</div></button>`; }).join("") || `<p class="empty">Aucun livret.</p>`}
+    ${S.livrets.map(l => { const st = livretStats(S, l), cur = st.soldes[mi - 1]; return `<button class="row" data-edit="livret" data-id="${l.id}"><div class="main"><div class="t">${esc(l.nom)}</div><div class="s">${eur(st.mensM[mi - 1])} / mois · point bas ${eur(st.bas)} (${MC[st.moisBas - 1]})</div><div style="margin-top:4px">${st.bas < 0 ? `<span class="pill neg">Manque ${eur(-st.bas)}</span>` : `<span class="pill ok">OK sur l'année</span>`}</div></div><div class="amt"><span class="${cur < 0 ? "neg" : ""}">${eur(cur)}</span>${spark(st.soldes, mi)}</div></button>`; }).join("") || `<p class="empty">Aucun livret.</p>`}
     <button class="addrow" data-new="livret">${ICON.plus.replace("<svg", '<svg width="18" height="18"')} Ajouter un livret</button>
   </div>
-  <div class="totals"><span>Virement total / mois</span><span>${eur(S.livrets.reduce((a, l) => a + livretStats(S, l).mens, 0))}</span></div>
+  <div class="totals"><span>Virement total / mois</span><span>${eur(S.livrets.reduce((a, l) => a + livretStats(S, l).mensM[mi - 1], 0))}</span></div>
   ${anyNeg ? `<p class="note">Un livret en négatif : la dépense arrive avant d'avoir été épargnée. Augmentez son solde de départ ou prévoyez un virement ponctuel.</p>` : ""}</section>
   <section class="card"><h2>Compte joint<small>${S.repartition === "egal" ? "50 / 50" : "au prorata des salaires"}</small></h2>
     ${j.pers.map(p => `<div class="kv"><span>${esc(p.nom)} vire <span class="muted">(${Math.round(p.part * 100)} %)</span></span><b>${eur(p.vir)}</b></div>`).join("")}
@@ -851,10 +904,13 @@ let sheet = null; // {kind, id|null, draft}
 const catOpts = (S, sens, none) => [["", none], ...S.categories.filter(c => c.sens === sens).map(c => [c.id, `${c.icone} ${c.nom}`])];
 function fieldsFor(kind, S, d) {
   const months = MOIS.map((n, i) => [i + 1, n]);
+  const mensuels = S.revenus.filter(r => r.frequence === "Mensuel" && r.id !== sheet?.id);
   return {
-    revenu: [["libelle", "Libellé", "text"], ["montant", "Montant", "euro"], ["personne", "Personne", "select", [...S.personnes, ["Commun", "Compte joint"]]], ["categorie", "Catégorie", "select", catOpts(S, "revenu", "À catégoriser")], ["frequence", "Fréquence", "select", ["Mensuel", "Ponctuel"]], ...(d.frequence === "Ponctuel" ? [["mois", "Mois", "select", months]] : [])],
+    revenu: [["libelle", "Libellé", "text"], ["montant", "Montant", "euro"], ["personne", "Personne", "select", [...S.personnes, ["Commun", "Compte joint"]]], ["categorie", "Catégorie", "select", catOpts(S, "revenu", "À catégoriser")], ["frequence", "Fréquence", "select", ["Mensuel", "Ponctuel"]], ...(d.frequence === "Ponctuel" ? [["mois", "Mois", "select", months]] : []),
+      ...(d.frequence === "Ponctuel" && mensuels.length ? [["revenu", "Versement d'un revenu mensuel", "select", [["", "Non (revenu ponctuel)"], ...mensuels.map(r => [r.id, `${r.libelle || "Revenu"} · ${eur(r.montant)} / mois`])]]] : [])],
     charge: [["libelle", "Libellé", "text"], ["montant", "Montant / mois", "euro"], ["categorie", "Catégorie", "select", catOpts(S, "depense", "À catégoriser")], ["compte", "Compte", "select", comptesOf(S).map(c => [c, compteNom(c)])]],
-    provision: [["libelle", "Libellé", "text"], ["montant", "Montant annuel", "euro"], ["mois", "Mois de la dépense", "select", months], ["livret", "Livret", "select", [["", "—"], ...S.livrets.map(l => [l.id, l.nom])]]],
+    provision: [["libelle", "Libellé", "text"], ["montant", "Montant annuel", "euro"], ["mois", "Mois de la dépense", "select", months], ["livret", "Livret", "select", [["", "—"], ...S.livrets.map(l => [l.id, l.nom])]],
+      ["payeMois", `Pointage ${S.annee}`, "select", [["", "Pas encore payée"], ...months.map(([v, n]) => [v, `Payée en ${n.toLowerCase()}`])]], ...(d.payeMois ? [["payeMontant", "Montant payé", "euro"]] : [])],
     enveloppe: [["libelle", "Nom de l'enveloppe", "text"], ["prevu", "Budget / mois", "euro"], ["categorie", "Catégorie des saisies", "select", catOpts(S, "depense", "Automatique (d'après le nom)")]],
     livret: [["nom", "Nom du livret", "text"], ["solde", `Solde au 1er janvier ${S.annee}`, "euro"]]
   }[kind];
@@ -879,12 +935,13 @@ function openSheet(kind, id, preset = {}) {
   if (kind === "revenu" && estJoint(draft.personne)) draft.personne = "Commun";
   if (kind === "charge" && (!draft.compte || estJoint(draft.compte))) draft.compte = "Joint";
   if (kind === "enveloppe") draft.categorie = resolveCat(S, draft.categorie, "depense");
+  if (kind === "provision") { const pp = provPaye(S, draft); draft.payeMois = pp ? pp.mois : ""; draft.payeMontant = pp ? pp.montant : ""; }
   if (kind === "depense") draft.categorie = it ? depCat(S, it.data) : (preset.categorie ?? envCat(S, S.enveloppes.find(e => e.id === draft.enveloppe)));
   if (kind === "depense" && !comptesOf(S).includes(draft.compte)) draft.compte = it ? compteFromPar(S, draft.par) : defaultCompte(S);
   sheet = { kind, id, draft, confirmDel: false, cat0: draft.categorie };
   renderSheet(true);
 }
-function closeSheet() { sheet = null; $("#sheet").innerHTML = ""; document.body.style.overflow = search || report ? "hidden" : ""; }
+function closeSheet() { sheet = null; $("#sheet").innerHTML = ""; document.body.style.overflow = search || report || tool ? "hidden" : ""; }
 function renderSheet(first) {
   if (!sheet) return;
   const S = state(), d = sheet.draft, k = sheet.kind;
@@ -914,8 +971,11 @@ function renderSheet(first) {
       if (type === "euro") return `<label class="field"><span>${label}</span><div class="euro"><input id="f-${f}" data-f="${f}" inputmode="decimal" value="${v === "" ? "" : esc(String(v).replace(".", ","))}"></div></label>`;
       return `<label class="field"><span>${label}</span><input id="f-${f}" data-f="${f}" value="${esc(v)}" autocapitalize="sentences"></label>`;
     }).join("");
-    if (k === "provision" && num(d.montant)) body += `<p class="note">À mettre de côté : <b>${eur(num(d.montant) / 12)}</b> par mois.</p>`;
+    if (k === "provision" && num(d.montant)) body += `<p class="note provm">À mettre de côté : <b>${eur(num(d.montant) / 12)}</b> par mois.</p>`;
+    if (k === "provision" && Number(d.payeMois)) body += `<p class="note">Payée : elle sort du livret en ${MOIS[Number(d.payeMois) - 1].toLowerCase()} et ne compte plus dans la mise de côté des mois suivants (${S.annee}).</p>`;
     if (k === "charge" && sheet.id) body += chargePayments(S, sheet.id);
+    if (k === "revenu" && sheet.id && d.frequence === "Mensuel") body += revenuVersements(S, sheet.id);
+    if (k === "revenu" && revenuOf(S, d)) body += `<p class="note">Versement de « ${esc(revenuOf(S, d).libelle || "revenu mensuel")} » : en ${MOIS[(Number(d.mois) || 1) - 1].toLowerCase()}, il remplace les ${eur(revenuOf(S, d).montant)} prévus (rien n'est compté deux fois).</p>`;
   }
   const delZone = sheet.id ? (sheet.confirmDel
     ? `<div class="btnrow"><button type="button" class="btn danger" data-act="delConfirm">Supprimer définitivement</button><button type="button" class="btn line" data-act="delCancel">Annuler</button></div>`
@@ -935,8 +995,16 @@ function chargePayments(S, id) {
   const deps = S.depenses.filter(x => x.charge === id && Number(x.annee) === Number(S.annee)).sort((a, b) => Number(b.mois) - Number(a.mois) || String(b.date || "").localeCompare(String(a.date || "")));
   const m = app.month || new Date().getMonth() + 1;
   return `<div class="field"><span>Paiements reliés · ${S.annee}</span><div class="list">${deps.map(x => `<button type="button" class="row" data-edit="depense" data-id="${esc(x.id)}"><div class="main"><div class="t">${MOIS[(Number(x.mois) || 1) - 1]}</div><div class="s">${esc([x.note, shortDate(x.date), depCompte(S, x) ? compteCourt(depCompte(S, x)) : ""].filter(Boolean).join(" · "))}</div></div><div class="amt">${eur2(x.montant)}</div>${ICON.chev}</button>`).join("") || `<p class="empty">Aucun paiement relié.</p>`}</div></div>
-    <button type="button" class="btn line block" data-act="payCharge" data-id="${esc(id)}">Saisir le paiement de ${MOIS[m - 1].toLowerCase()}</button>
-    <p class="note">Un paiement relié (une dépense, saisie ou importée du relevé) remplace le montant prévu ce mois-là. Pour relier une dépense existante : ouvrez-la, puis choisissez la charge.</p>`;
+    <div class="btnrow"><button type="button" class="btn ghost" data-act="openPoint" data-only="charge:${esc(id)}" data-m="${m}">Trouver la transaction</button><button type="button" class="btn line" data-act="payCharge" data-id="${esc(id)}">Saisir le paiement</button></div>
+    <p class="note">Un paiement relié (une dépense, saisie ou importée du relevé) remplace le montant prévu ce mois-là. « Trouver la transaction » propose les dépenses de ${MOIS[m - 1].toLowerCase()} qui lui ressemblent.</p>`;
+}
+// Fiche d'un revenu mensuel : ses versements reliés de l'année (chacun remplace le montant prévu de son mois).
+function revenuVersements(S, id) {
+  const L = S.revenus.filter(x => x.revenu === id && revenuOf(S, x)).sort((a, b) => Number(b.mois) - Number(a.mois));
+  const m = app.month || new Date().getMonth() + 1;
+  return `<div class="field"><span>Versements reliés · ${S.annee}</span><div class="list">${L.map(x => `<button type="button" class="row" data-edit="revenu" data-id="${esc(x.id)}"><div class="main"><div class="t">${MOIS[(Number(x.mois) || 1) - 1]}</div><div class="s">${esc(x.libelle || "")}</div></div><div class="amt">${eur2(x.montant)}</div>${ICON.chev}</button>`).join("") || `<p class="empty">Aucun versement relié.</p>`}</div></div>
+    <button type="button" class="btn ghost block" data-act="openPoint" data-only="revenu:${esc(id)}" data-m="${m}">Trouver la transaction de ${MOIS[m - 1].toLowerCase()}</button>
+    <p class="note">Un versement relié (un revenu ponctuel, importé du relevé par exemple) remplace le montant prévu ce mois-là.</p>`;
 }
 // Relier (ou délier) la dépense en cours à une charge : plus d'enveloppe ; catégorie, note et compte de la charge par défaut.
 function pickCharge() {
@@ -975,6 +1043,12 @@ function saveSheet() {
     if (d.compte) { d.par = comptePar(d.compte); if (!id && !d.ref) LS.set("bf:depCompte", d.compte); } // « par » suit le compte choisi
     else delete d.compte;
   } else {
+    if (kind === "provision") {
+      const pm = Number(d.payeMois) || 0;
+      if (pm) d.paye = { annee: state().annee, mois: pm, montant: num(d.payeMontant) || d.montant }; else delete d.paye;
+      delete d.payeMois; delete d.payeMontant;
+    }
+    if (kind === "revenu" && (d.frequence === "Mensuel" || !d.revenu)) delete d.revenu;
     const nameF = kind === "livret" || kind === "categorie" ? "nom" : "libelle";
     if (!String(d[nameF] || "").trim()) return err("Donnez-lui un nom.");
     if (kind === "categorie") { d.nom = d.nom.trim(); d.icone = String(d.icone || "").trim() || "🏷️"; }
@@ -1131,7 +1205,203 @@ function openSearch() {
   refreshSearch();
   $("#q").focus();
 }
-function closeSearch() { search = null; $("#search").innerHTML = ""; document.body.style.overflow = sheet || report ? "hidden" : ""; }
+function closeSearch() { search = null; $("#search").innerHTML = ""; document.body.style.overflow = sheet || report || tool ? "hidden" : ""; }
+
+/* ====================== Pages « À catégoriser » et « Pointage » ====================== */
+// Panneaux plein écran, comme la recherche. Ils montrent toujours tout le foyer (sans le filtre par compte).
+let tool = null; // {type: "tri", sens, open, done: [{kind, id, prev}]} ou {type: "point", m, only: "charge:id" | "revenu:id" | null}
+const TOOL_TITLES = { tri: "À catégoriser", point: "Pointage" };
+
+/* ---------- À catégoriser ---------- */
+// Lignes sans catégorie : dépenses de l'année, revenus et charges mensuelles (les paiements reliés comptent avec leur charge ou leur revenu).
+function triEntries(S) {
+  const envName = Object.fromEntries(S.enveloppes.map(e => [e.id, e.libelle])), L = [];
+  const mm = m => String(Number(m) || 1).padStart(2, "0");
+  S.depenses.forEach(d => {
+    if (Number(d.annee) !== Number(S.annee) || !num(d.montant) || chargeOf(S, d) || depCat(S, d)) return;
+    const c = depCompte(S, d);
+    L.push({ kind: "depense", sens: "depense", id: d.id, montant: num(d.montant), titre: d.note || envName[d.enveloppe] || "Dépense", text: d.note || "",
+      sub: [shortDate(d.date), depLieu(S, d, envName), c ? compteCourt(c) : d.par].filter(Boolean).join(" · "), key: `${S.annee}-${mm(d.mois)}-${String(d.date || "").slice(8, 10) || "15"}` });
+  });
+  S.revenus.forEach(r => {
+    if (!num(r.montant) || revenuOf(S, r) || revenuCat(S, r)) return;
+    const mensuel = r.frequence === "Mensuel";
+    L.push({ kind: "revenu", sens: "revenu", id: r.id, montant: num(r.montant), titre: r.libelle || "Revenu", text: r.libelle || "",
+      sub: [mensuel ? "Chaque mois" : MOIS[(Number(r.mois) || 1) - 1], personneNom(r.personne)].filter(Boolean).join(" · "), key: mensuel ? "9" : `${S.annee}-${mm(r.mois)}-15` });
+  });
+  S.charges.forEach(c => {
+    if (!num(c.montant) || chargeCat(S, c)) return;
+    L.push({ kind: "charge", sens: "depense", id: c.id, montant: num(c.montant), titre: c.libelle || "Charge", text: c.libelle || "", sub: `Charge mensuelle · ${compteNom(c.compte)}`, key: "9" });
+  });
+  return L.sort((a, b) => b.key.localeCompare(a.key) || b.montant - a.montant);
+}
+// Catégories d'un sens, les plus utilisées d'abord (d'après les lignes rangées à la main).
+function topCats(S, sens) {
+  const n = new Map(), bump = c => c && n.set(c, (n.get(c) || 0) + 1);
+  if (sens === "depense") { S.depenses.forEach(d => { if (!d.catAuto) bump(depCat(S, d)); }); S.charges.forEach(c => bump(chargeCat(S, c))); }
+  else S.revenus.forEach(r => { if (!r.catAuto) bump(revenuCat(S, r)); });
+  return S.categories.filter(c => c.sens === sens).sort((a, b) => (n.get(b.id) || 0) - (n.get(a.id) || 0));
+}
+const TRI_MAX = 60;
+// Lignes de la page que l'historique (ou une enseigne connue) permet de ranger d'un coup.
+function triAutoList(S, entries = triEntries(S)) {
+  const ids = new Set(entries.map(e => e.id));
+  return [...autoSortable(S, "depense", ALL_MONTHS), ...autoSortable(S, "revenu", ALL_MONTHS)].filter(x => ids.has(x.id));
+}
+function triRow(S, e, tops) {
+  const sugg = autoCat(S, e.text, e.sens), open = tool.open === e.id;
+  const cats = open ? tops[e.sens] : [...(sugg ? [catMeta(S, sugg)] : []), ...tops[e.sens].filter(c => c.id !== sugg).slice(0, sugg ? 3 : 4)];
+  const chip = c => `<button type="button" class="${c.id === sugg ? "sugg" : ""}" data-act="triCat" data-kind="${e.kind}" data-id="${esc(e.id)}" data-cat="${esc(c.id)}" style="--cc:${esc(c.couleur)}">${esc(c.icone)} ${esc(c.nom)}</button>`;
+  return `<div class="trow"><button class="row" data-edit="${e.kind}" data-id="${esc(e.id)}">${ico(UNCAT, "sm")}<div class="main"><div class="t">${esc(e.titre)}</div><div class="s">${esc(e.sub)}</div></div><div class="amt ${e.sens === "revenu" ? "pos" : ""}">${e.sens === "revenu" ? "+" : ""}${eur2(e.montant)}</div>${ICON.chev}</button>
+    <div class="chips tchips">${cats.map(chip).join("")}${open ? "" : `<button type="button" class="more" data-act="triMore" data-id="${esc(e.id)}">Autre…</button>`}</div></div>`;
+}
+function triHTML(S) {
+  const all = triEntries(S), sens = tool.sens;
+  const L = sens === "all" ? all : all.filter(e => e.sens === sens), shown = L.slice(0, TRI_MAX);
+  const nb = k => all.filter(e => e.sens === k).length;
+  const tops = { depense: topCats(S, "depense"), revenu: topCats(S, "revenu") };
+  const nAuto = triAutoList(S, all).length;
+  const seg = [["all", "Tout", all.length], ["depense", "Dépenses", nb("depense")], ["revenu", "Revenus", nb("revenu")]].map(([k, l, n]) => `<button type="button" data-act="triSens" data-sens="${k}" aria-pressed="${sens === k}">${l} · ${n}</button>`).join("");
+  const done = tool.done.filter(x => { const it = app.items.get(x.id); return it && !it.deleted; }).slice(0, 15);
+  const doneRow = x => {
+    const d = app.items.get(x.id).data, cat = catMeta(S, lineCat(S, x.kind, d));
+    return `<div class="row rrow"><button type="button" class="rmain" data-edit="${x.kind}" data-id="${esc(x.id)}">${ico(cat, "sm")}<div class="main"><div class="t">${esc(lineText(x.kind, d) || TITLES[x.kind])}</div><div class="s">${esc(cat.nom)}${x.auto ? " · d'après l'historique" : ""}</div></div><div class="amt">${eur2(d.montant)}</div></button>${x.prev ? `<button type="button" class="btn line sm" data-act="triUndo" data-id="${esc(x.id)}">Annuler</button>` : ""}</div>`;
+  };
+  return `<div class="aseg">${seg}</div>
+    <section class="card"><h2>${L.length ? plural(L.length, "ligne") + " à ranger" : "Tout est rangé"}<small>${S.annee}</small></h2>
+      <p class="note" style="margin-top:0">Touchez une catégorie pour ranger la ligne (la <b>suggestion</b> est en couleur) ; les lignes du même commerçant suivent. Touchez la ligne pour la modifier.</p>
+      ${nAuto ? `<button type="button" class="btn block sm" data-act="triAuto" style="margin-bottom:6px">Ranger ${plural(nAuto, "ligne")} d'après l'historique</button>` : ""}
+      <div class="list">${shown.map(e => triRow(S, e, tops)).join("") || `<p class="empty">Aucune ligne « À catégoriser »${sens === "all" ? "" : " ici"}.</p>`}</div>
+      ${L.length > shown.length ? `<p class="note">Les ${TRI_MAX} plus récentes sont affichées : les suivantes apparaissent au fur et à mesure.</p>` : ""}</section>
+    ${done.length ? `<section class="card"><h2>Rangées à l'instant<small>${done.length}</small></h2><div class="list">${done.map(doneRow).join("")}</div></section>` : ""}`;
+}
+function triSet(kind, id, cat) {
+  const it = app.items.get(id); if (!it || !cat) return;
+  const prev = it.data, d = { ...prev, categorie: cat };
+  delete d.catAuto; // choisie à la main : elle sert d'exemple
+  put(kind, id, d);
+  const n = spreadLike(kind, id, d, prev);
+  tool.done = [{ kind, id, prev }, ...tool.done.filter(x => x.id !== id)]; tool.open = null;
+  toast(`Rangée dans « ${catMeta(state(), cat).nom} »${n ? ` · ${plural(n, "ligne semblable")} aussi` : ""}`);
+}
+
+/* ---------- Pointage ---------- */
+// Revenus et charges mensuels du mois (avec leurs versements / paiements reliés) et dépenses annuelles prévues ou payées ce mois-là.
+function pointItems(S, m) {
+  const L = [];
+  S.revenus.filter(r => r.frequence === "Mensuel" && num(r.montant)).forEach(r => {
+    const liens = S.revenus.filter(x => x.revenu === r.id && revenuOf(S, x) && Number(x.mois) === m);
+    L.push({ kind: "revenu", x: r, liens, done: liens.length > 0 });
+  });
+  S.charges.filter(c => num(c.montant)).forEach(c => {
+    const liens = S.depenses.filter(d => d.charge === c.id && Number(d.annee) === Number(S.annee) && Number(d.mois) === m);
+    L.push({ kind: "charge", x: c, liens, done: liens.length > 0 });
+  });
+  S.provisions.filter(p => num(p.montant)).forEach(p => {
+    const pp = provPaye(S, p);
+    if (Number(p.mois) === m || (pp && pp.mois === m)) L.push({ kind: "provision", x: p, liens: [], done: !!pp, pp });
+  });
+  return L;
+}
+/* Transactions qui pourraient correspondre à un revenu mensuel (revenus ponctuels pas encore reliés) ou à une charge / dépense annuelle
+ * (dépenses pas encore reliées) : même mois (ou mois voisin), montant proche, libellé qui ressemble, commerçant des mois précédents, même compte. */
+function pointCandidates(S, kind, x, m) {
+  const dep = kind !== "revenu", lk = dep ? "depense" : "revenu", target = num(x.montant);
+  const pool = dep ? S.depenses.filter(d => Number(d.annee) === Number(S.annee) && !chargeOf(S, d)) : S.revenus.filter(r => r.frequence !== "Mensuel" && !revenuOf(S, r));
+  const hist = new Set((kind === "charge" ? S.depenses.filter(d => d.charge === x.id) : kind === "revenu" ? S.revenus.filter(r => r.revenu === x.id) : [])
+    .map(d => merchantKey(lineText(lk, d))).filter(Boolean));
+  const xw = new Set(learnWords(x.libelle));
+  return pool.map(d => {
+    const mo = Number(d.mois) || 1, dm = Math.abs(mo - m);
+    if (dm > 1) return null;
+    const v = num(d.montant), text = lineText(lk, d), ecart = Math.abs(v - target) / Math.max(target, 1);
+    const same = sameMoney(v, target), deja = hist.has(merchantKey(text)), mots = learnWords(text).some(w => xw.has(w));
+    if (!(same || ecart <= .05 || deja || (mots && ecart <= .5))) return null;
+    const compte = kind === "charge" ? depCompte(S, d) === x.compte : kind === "revenu" ? d.personne === x.personne : true;
+    const score = (same ? 3 : ecart <= .05 ? 2 : ecart <= .2 ? 1 : 0) + (deja ? 3 : 0) + (mots ? 2 : 0) + (compte ? 1 : 0) - dm * 2;
+    const why = [same ? "même montant" : `${v > target ? "+" : "−"}${eur2(Math.abs(v - target))}`, deja && "comme les mois précédents", mots && "libellé proche", !compte && "autre compte", dm && "en " + MOIS[mo - 1].toLowerCase()].filter(Boolean);
+    return { d, v, score, why };
+  }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 4);
+}
+function pointLink(kind, xid, id, m) {
+  const S = state(), it = app.items.get(id); if (!it) return;
+  if (kind === "charge") {
+    const c = S.charges.find(x => x.id === xid); if (!c) return;
+    const d = { ...it.data, charge: c.id, enveloppe: "", mois: m }; delete d.envAuto;
+    if (it.data.catAuto || !depCat(S, it.data)) { d.categorie = chargeCat(S, c); delete d.catAuto; }
+    put("depense", id, d);
+    toast(`Paiement de « ${c.libelle || "la charge"} » · ${MOIS[m - 1].toLowerCase()}`);
+  } else {
+    const r = S.revenus.find(x => x.id === xid); if (!r) return;
+    const d = { ...it.data, revenu: r.id, mois: m };
+    if (it.data.catAuto || !revenuCat(S, it.data)) { d.categorie = revenuCat(S, r); delete d.catAuto; }
+    put("revenu", id, d);
+    toast(`Versement de « ${r.libelle || "revenu"} » · ${MOIS[m - 1].toLowerCase()}`);
+  }
+}
+// Délier : la dépense retrouve une enveloppe devinée (sinon aucune), le revenu redevient un revenu ponctuel.
+function pointUnlink(id) {
+  const it = app.items.get(id); if (!it) return;
+  if (it.kind === "depense") {
+    const { charge, ...rest } = it.data, S = state();
+    if (!rest.enveloppe) { const env = autoEnv(S, rest.note, depCat(S, rest)); if (env) Object.assign(rest, { enveloppe: env, envAuto: true }); }
+    put("depense", id, rest);
+  } else { const { revenu, ...rest } = it.data; put("revenu", id, rest); }
+  toast("Lien retiré");
+}
+function pointHTML(S) {
+  const m = tool.m, all = pointItems(S, m), L = tool.only ? all.filter(i => `${i.kind}:${i.x.id}` === tool.only) : all;
+  const nDone = L.filter(i => i.done).length, liv = Object.fromEntries(S.livrets.map(l => [l.id, l.nom]));
+  const candRow = (i, c) => {
+    const lk = i.kind === "revenu" ? "revenu" : "depense", d = c.d, cpt = lk === "depense" ? depCompte(S, d) : "";
+    const btn = i.kind === "provision" ? `<button type="button" class="btn sm" data-act="provPaid" data-id="${esc(i.x.id)}" data-m="${Number(d.mois) || m}" data-montant="${c.v}">C'est elle</button>`
+      : `<button type="button" class="btn sm" data-act="pointLink" data-kind="${i.kind}" data-x="${esc(i.x.id)}" data-id="${esc(d.id)}">Relier</button>`;
+    return `<div class="row rrow"><button type="button" class="rmain" data-edit="${lk}" data-id="${esc(d.id)}"><div class="main"><div class="t">${esc(lineText(lk, d) || TITLES[lk])}</div><div class="s">${esc([lk === "depense" ? shortDate(d.date) : MOIS[(Number(d.mois) || 1) - 1], cpt ? compteCourt(cpt) : personneNom(d.personne), ...c.why].filter(Boolean).join(" · "))}</div></div><div class="amt ${lk === "revenu" ? "pos" : ""}">${eur2(c.v)}</div></button>${btn}</div>`;
+  };
+  const lienRow = (i, d) => {
+    const lk = i.kind === "revenu" ? "revenu" : "depense", cpt = lk === "depense" ? depCompte(S, d) : "";
+    return `<div class="row rrow"><button type="button" class="rmain" data-edit="${lk}" data-id="${esc(d.id)}"><div class="main"><div class="t">${esc(lineText(lk, d) || TITLES[lk])}</div><div class="s">${esc([lk === "depense" ? shortDate(d.date) : "", cpt ? compteCourt(cpt) : personneNom(d.personne)].filter(Boolean).join(" · "))}</div></div><div class="amt ${lk === "revenu" ? "pos" : ""}">${eur2(d.montant)}</div></button><button type="button" class="btn line sm" data-act="pointUnlink" data-id="${esc(d.id)}">Délier</button></div>`;
+  };
+  const item = i => {
+    const x = i.x, meta = i.kind === "provision" ? { icone: "🐷", couleur: "#C28316" } : catMeta(S, i.kind === "revenu" ? revenuCat(S, x) : chargeCat(S, x));
+    const prevu = i.kind === "provision" ? `${eur2(x.montant)} prévus en ${MOIS[(Number(x.mois) || 1) - 1].toLowerCase()} · ${liv[x.livret] || "sans livret"}` : `${eur2(x.montant)} prévus · ${i.kind === "revenu" ? personneNom(x.personne) : compteNom(x.compte)}`;
+    const etat = i.done ? `<span class="pill ok">${i.kind === "revenu" ? "Reçu" : i.kind === "charge" ? "Payée" : "Payée"}</span>` : `<span class="pill warn">À pointer</span>`;
+    let body;
+    if (i.kind === "provision") {
+      body = i.done ? `<div class="row rrow"><div class="rmain"><div class="main"><div class="t">Payée en ${MOIS[i.pp.mois - 1].toLowerCase()}</div><div class="s">ne compte plus dans la mise de côté des mois suivants</div></div><div class="amt">${eur2(i.pp.montant)}</div></div><button type="button" class="btn line sm" data-act="provUnpay" data-id="${esc(x.id)}">Annuler</button></div>`
+        : pointCandidates(S, "provision", x, m).map(c => candRow(i, c)).join("") + `<button type="button" class="btn ghost block sm" data-act="provPaid" data-id="${esc(x.id)}" data-m="${m}">Marquer payée en ${MOIS[m - 1].toLowerCase()}</button>`;
+    } else if (i.done) body = i.liens.map(d => lienRow(i, d)).join("");
+    else {
+      const cands = pointCandidates(S, i.kind, x, m);
+      body = (cands.length ? cands.map(c => candRow(i, c)).join("") : `<p class="note" style="margin:0 0 6px 46px">Aucune transaction ressemblante en ${MOIS[m - 1].toLowerCase()}${i.kind === "charge" ? " : importez le relevé, ou saisissez le paiement" : " : importez le relevé, ou ajoutez le versement"}.</p>`)
+        + (i.kind === "charge" ? `<button type="button" class="btn line block sm" data-act="payCharge" data-id="${esc(x.id)}" data-m="${m}">Saisir le paiement</button>` : `<button type="button" class="btn line block sm" data-act="payRevenu" data-id="${esc(x.id)}" data-m="${m}">Ajouter le versement</button>`);
+    }
+    return `<div class="pitem${i.done ? " done" : ""}"><button class="row" data-edit="${i.kind}" data-id="${esc(x.id)}">${ico(meta, "sm")}<div class="main"><div class="t">${esc(x.libelle || TITLES[i.kind])}</div><div class="s">${esc(prevu)}</div></div>${etat}</button><div class="pbody">${body}</div></div>`;
+  };
+  const block = (kind, title) => { const B = L.filter(i => i.kind === kind); return B.length ? `<section class="card"><h2>${title}<small>${B.filter(i => i.done).length} / ${B.length}</small></h2><div class="list">${B.map(item).join("")}</div></section>` : ""; };
+  return `<section class="card period"><div class="pnav"><button class="iconbtn sm" data-act="pointMonth" data-dir="-1" aria-label="Mois précédent" ${m <= 1 ? "disabled" : ""}>${ICON.prev}</button>
+      <span class="plabel">${MOIS[m - 1]} ${S.annee}</span>
+      <button class="iconbtn sm" data-act="pointMonth" data-dir="1" aria-label="Mois suivant" ${m >= 12 ? "disabled" : ""}>${ICON.next}</button></div>
+      <div class="kv total"><span>Pointé</span><b>${nDone} / ${L.length}</b></div>
+      <p class="note" style="margin:0">Pour chaque revenu et charge du mois, retrouvez sa transaction (saisie ou importée du relevé) et reliez-la : son montant réel remplace le montant prévu. Une dépense annuelle pointée « payée » ne compte plus dans la mise de côté des mois suivants.</p>
+      ${tool.only ? `<button type="button" class="btn line block sm" data-act="pointAll">Voir tout le pointage du mois</button>` : ""}</section>
+    ${block("revenu", "Revenus mensuels")}${block("charge", "Charges mensuelles")}${block("provision", "Dépenses annuelles")}
+    ${L.length ? "" : `<section class="card"><p class="empty">Rien à pointer en ${MOIS[m - 1].toLowerCase()} : ajoutez des revenus mensuels, des charges ou des dépenses annuelles dans Budget.</p></section>`}`;
+}
+
+function refreshTool() {
+  const box = $("#tres"); if (!tool || !box) return;
+  box.innerHTML = tool.type === "tri" ? triHTML(state()) : pointHTML(state());
+}
+function openTool(type, opts = {}) {
+  tool = type === "tri" ? { type, sens: "all", open: null, done: [] } : { type, m: opts.m || app.month || curMonth(state()) || 1, only: opts.only || null };
+  $("#tool").innerHTML = `<div class="spanel" role="dialog" aria-modal="true" aria-label="${TOOL_TITLES[type]}">
+    <div class="shead"><div class="col"><div class="srow"><h1 class="rtitle">${TOOL_TITLES[type]}</h1><button type="button" class="sclose" data-act="closeTool">Fermer</button></div></div></div>
+    <div class="sbody"><div class="col" id="tres"></div></div></div>`;
+  document.body.style.overflow = "hidden";
+  refreshTool();
+}
+function closeTool() { tool = null; $("#tool").innerHTML = ""; document.body.style.overflow = sheet || search || report ? "hidden" : ""; }
 
 /* ====================== Actions ====================== */
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => t.hidden = true, 2400); }
@@ -1176,10 +1446,39 @@ document.addEventListener("click", async e => {
     case "openSearch": openSearch(); break;
     case "closeSearch": closeSearch(); break;
     case "closeReport": closeReport(); break;
+    case "closeTool": closeTool(); break;
+    case "openTri": openTool("tri"); break;
+    case "openPoint": { const m = Number(t.dataset.m) || 0, only = t.dataset.only || null; if (sheet) closeSheet(); openTool("point", { m, only }); break; }
+    case "triSens": tool.sens = t.dataset.sens; tool.open = null; refreshTool(); break;
+    case "triMore": tool.open = t.dataset.id; refreshTool(); break;
+    case "triCat": triSet(t.dataset.kind, t.dataset.id, t.dataset.cat); break;
+    case "triUndo": { const x = tool.done.find(y => y.id === t.dataset.id), it = x && app.items.get(x.id); if (!it) break; put(x.kind, x.id, x.prev); tool.done = tool.done.filter(y => y !== x); toast("Remise dans « À catégoriser »"); break; }
+    case "triAuto": {
+      const S = state(), list = triAutoList(S);
+      list.forEach(x => put(x.kind, x.id, { ...app.items.get(x.id).data, categorie: x.cat, catAuto: true }));
+      tool.done = [...list.map(x => ({ kind: x.kind, id: x.id, auto: true })), ...tool.done];
+      toast(`${plural(list.length, "ligne")} rangée${list.length > 1 ? "s" : ""} · touchez-en une pour corriger`); break;
+    }
+    case "pointMonth": tool.m = Math.min(12, Math.max(1, tool.m + Number(t.dataset.dir))); refreshTool(); $("#tool .sbody").scrollTop = 0; break;
+    case "pointAll": tool.only = null; refreshTool(); break;
+    case "pointLink": pointLink(t.dataset.kind, t.dataset.x, t.dataset.id, tool.m); break;
+    case "pointUnlink": pointUnlink(t.dataset.id); break;
+    case "payRevenu": { // versement d'un revenu mensuel saisi à la main
+      const S = state(), r = S.revenus.find(x => x.id === t.dataset.id); if (!r) break;
+      openSheet("revenu", null, { libelle: r.libelle || "", montant: num(r.montant), personne: r.personne, categorie: revenuCat(S, r), frequence: "Ponctuel", mois: Number(t.dataset.m) || app.month || 1, revenu: r.id }); break;
+    }
+    case "provPaid": {
+      const S = state(), it = app.items.get(t.dataset.id); if (!it) break;
+      const p = it.data, cm = curMonth(S), mois = Number(t.dataset.m) || (cm && cm < Number(p.mois) ? cm : Number(p.mois) || 1);
+      put("provision", it.id, { ...p, paye: { annee: S.annee, mois, montant: num(t.dataset.montant) || num(p.montant) } });
+      toast(`« ${p.libelle || "Dépense annuelle"} » payée en ${MOIS[mois - 1].toLowerCase()} · touchez-la pour corriger`); break;
+    }
+    case "provUnpay": { const it = app.items.get(t.dataset.id); if (!it) break; const { paye, ...rest } = it.data; put("provision", it.id, rest); toast("Pointage annulé"); break; }
+    case "rpaye": reportPaye(Number(t.dataset.i)); break;
     case "reportNew": openSheet("depense"); sheet.fromReport = true; break;
     case "payCharge": { // depuis la fiche d'une charge : nouvelle dépense reliée, au montant prévu
       const S = state(), c = S.charges.find(x => x.id === t.dataset.id); if (!c) break;
-      openSheet("depense", null, { charge: c.id, enveloppe: "", montant: num(c.montant), note: c.libelle || "", compte: c.compte, categorie: chargeCat(S, c) }); break;
+      openSheet("depense", null, { charge: c.id, enveloppe: "", montant: num(c.montant), note: c.libelle || "", compte: c.compte, categorie: chargeCat(S, c), ...(t.dataset.m ? { mois: Number(t.dataset.m) } : {}) }); break;
     }
     case "autoSort": {
       const S = state(), list = autoSortable(S, t.dataset.sens, period(S).ms);
@@ -1197,6 +1496,7 @@ document.addEventListener("click", async e => {
     case "delConfirm": {
       const { kind, id } = sheet; del(kind, id);
       if (kind === "charge") state().depenses.filter(x => x.charge === id).forEach(x => { const { charge, ...rest } = app.items.get(x.id).data; put("depense", x.id, rest); }); // ses paiements redeviennent des dépenses
+      if (kind === "revenu") state().revenus.filter(x => x.revenu === id).forEach(x => { const { revenu, ...rest } = app.items.get(x.id).data; put("revenu", x.id, rest); }); // ses versements redeviennent des revenus ponctuels
       if (kind === "livret") state().provisions.filter(p => p.livret === id).forEach(p => { const it = app.items.get(p.id); put("provision", p.id, { ...it.data, livret: "" }); });
       closeSheet(); toast("Supprimé"); break;
     }
@@ -1227,10 +1527,12 @@ document.addEventListener("input", e => {
     sheet.draft[el.dataset.f] = el.value;
     if (el.dataset.f === "categorie") sheet.draft._ct = true;
     if (el.dataset.f === "charge" && sheet.kind === "depense") pickCharge();
+    if (el.dataset.f === "payeMois" && el.value && !num(sheet.draft.payeMontant)) sheet.draft.payeMontant = sheet.draft.montant;
+    if (el.dataset.f === "revenu" && sheet.kind === "revenu" && !sheet.draft._ct) { const S = state(), rm = revenuOf(S, sheet.draft); if (rm) sheet.draft.categorie = revenuCat(S, rm); }
     if (el.dataset.f === (sheet.kind === "depense" ? "note" : "libelle")) suggestCat();
     if (el.tagName === "SELECT" || (sheet.kind === "provision" && el.dataset.f === "montant")) {
       if (el.tagName === "SELECT") renderSheet();
-      else { const n = $("#sheet .note"); const v = num(el.value); if (n) n.innerHTML = `À mettre de côté : <b>${eur(v / 12)}</b> par mois.`; else if (v) renderSheet(); }
+      else { const n = $("#sheet .note.provm"); const v = num(el.value); if (n) n.innerHTML = `À mettre de côté : <b>${eur(v / 12)}</b> par mois.`; else if (v) renderSheet(); }
     }
   }
 });
@@ -1264,7 +1566,7 @@ document.addEventListener("submit", async e => {
   if (f.id === "joinForm") return joinHousehold(f.me.value.trim(), f.code.value.trim());
 });
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { if (sheet) closeSheet(); else if (search) closeSearch(); else if (report && !report.loading) closeReport(); }
+  if (e.key === "Escape") { if (sheet) closeSheet(); else if (search) closeSearch(); else if (report && !report.loading) closeReport(); else if (tool) closeTool(); }
   else if (e.key === "Enter" && e.target.id === "q") e.target.blur(); // ferme le clavier pour voir les résultats
 });
 
@@ -1393,9 +1695,9 @@ function importState(src, opt = {}) {
   const idMap = {};
   const nid = old => (idMap[old] = idMap[old] || newId());
   (src.livrets || []).forEach(l => put("livret", nid(l.id), { nom: l.nom, solde: num(l.solde), ordre: o++ }));
-  (src.revenus || []).forEach(r => put("revenu", nid(r.id), { libelle: r.libelle, personne: fix(r.personne), type: r.type, ...(r.categorie != null ? { categorie: r.categorie } : {}), frequence: r.frequence === "Mensuel" ? "Mensuel" : "Ponctuel", mois: Number(r.mois) || 1, montant: num(r.montant), ordre: o++ }));
+  (src.revenus || []).forEach(r => put("revenu", nid(r.id), { libelle: r.libelle, personne: fix(r.personne), type: r.type, ...(r.categorie != null ? { categorie: r.categorie } : {}), frequence: r.frequence === "Mensuel" ? "Mensuel" : "Ponctuel", mois: Number(r.mois) || 1, montant: num(r.montant), ...(r.revenu ? { revenu: nid(r.revenu) } : {}), ordre: o++ }));
   (src.charges || []).forEach(c => put("charge", nid(c.id), { libelle: c.libelle, categorie: c.categorie || "Autre", compte: fixC(c.compte), montant: num(c.montant), ordre: o++ }));
-  (src.provisions || []).forEach(p => put("provision", nid(p.id), { libelle: p.libelle, livret: p.livret ? nid(p.livret) : "", montant: num(p.montant), mois: Number(p.mois) || 1, ordre: o++ }));
+  (src.provisions || []).forEach(p => put("provision", nid(p.id), { libelle: p.libelle, livret: p.livret ? nid(p.livret) : "", montant: num(p.montant), mois: Number(p.mois) || 1, ...(p.paye ? { paye: p.paye } : {}), ordre: o++ }));
   (src.enveloppes || []).forEach(e => put("enveloppe", nid(e.id), { libelle: e.libelle, prevu: num(e.prevu), ...(e.categorie ? { categorie: e.categorie } : {}), ordre: o++ }));
   if (Array.isArray(src.depenses)) {
     src.depenses.forEach(d => put("depense", newId(), { enveloppe: nid(d.enveloppe), ...(d.charge ? { charge: nid(d.charge) } : {}), ...("categorie" in d ? { categorie: d.categorie } : {}), annee: Number(d.annee) || annee, mois: Number(d.mois) || 1, montant: num(d.montant), note: d.note || "", par: d.par || "", date: d.date || new Date().toISOString() }));
@@ -1681,12 +1983,13 @@ function findDuplicates(S, ops, compte) {
     used.add(p.key); o.match = { kind: p.kind, id: p.id, how: "saisie" };
   });
 }
-// charge : charge mensuelle dont l'opération est le paiement (dépense reliée, sans enveloppe)
-function addOp(S, o, compte, charge) {
+// lien : charge mensuelle dont l'opération est le paiement (dépense reliée, sans enveloppe),
+// ou revenu mensuel dont elle est le versement (revenu ponctuel relié)
+function addOp(S, o, compte, lien) {
   const id = newId(), dep = o.montant < 0, categorie = autoCat(S, o.libelle, "revenu"), auto = categorie ? { catAuto: true } : {};
-  const link = charge ? { categorie: chargeCat(S, charge), enveloppe: "", charge: charge.id } : {};
+  const link = !lien ? {} : dep ? { categorie: chargeCat(S, lien), enveloppe: "", charge: lien.id } : { categorie: revenuCat(S, lien), revenu: lien.id };
   if (dep) put("depense", id, { ...autoDep(S, o.libelle), ...link, annee: o.y, mois: o.m, montant: -o.montant, note: o.libelle, par: comptePar(compte), compte, date: o.date + "T12:00:00.000Z", ref: o.ref });
-  else put("revenu", id, { libelle: o.libelle, personne: comptePersonne(compte), type: "Autre", categorie, ...auto, frequence: "Ponctuel", mois: o.m, montant: o.montant, ordre: Date.now(), ref: o.ref });
+  else put("revenu", id, { libelle: o.libelle, personne: comptePersonne(compte), type: "Autre", categorie, ...auto, frequence: "Ponctuel", mois: o.m, montant: o.montant, ordre: Date.now(), ref: o.ref, ...link });
   return { id, kind: o.montant < 0 ? "depense" : "revenu" };
 }
 function applyStatement(ops, compte) {
@@ -1732,12 +2035,25 @@ async function importPdf(file) {
   report = { pick: true, ops: res.ops };              // reste en mémoire seulement, le temps de choisir le compte
   refreshReport();
 }
+// Charge ou revenu mensuel auquel une opération repérée peut être reliée.
+function reportLien(S, o) {
+  if (o.match.how === "ref") return null;
+  if (o.match.kind === "charge") return S.charges.find(c => c.id === o.match.id) || null;
+  if (o.match.kind === "revenu") return S.revenus.find(r => r.id === o.match.id && r.frequence === "Mensuel") || null;
+  return null;
+}
 function reportAddAnyway(i) {
   const o = report && report.dups[i]; if (!o) return;
-  const S = state(), ch = o.match.how !== "ref" && o.match.kind === "charge" ? S.charges.find(c => c.id === o.match.id) : null;
+  const S = state(), lien = reportLien(S, o);
   report.dups.splice(i, 1);
-  report.added.push(addOp(S, { ...o, ref: o.match.how === "ref" ? `${o.ref}+${newId().slice(0, 4)}` : o.ref }, report.compte, ch));
-  toast(ch ? `Ligne ajoutée, reliée à « ${ch.libelle || "la charge"} »` : "Ligne ajoutée");
+  report.added.push(addOp(S, { ...o, ref: o.match.how === "ref" ? `${o.ref}+${newId().slice(0, 4)}` : o.ref }, report.compte, lien));
+  toast(lien ? `Ligne ajoutée, reliée à « ${lien.libelle || (o.montant < 0 ? "la charge" : "le revenu")} »` : "Ligne ajoutée");
+}
+// Opération repérée comme une dépense annuelle : la pointer « payée » au mois et au montant du relevé.
+function reportPaye(i) {
+  const o = report && report.dups[i], it = o && app.items.get(o.match.id); if (!it || it.kind !== "provision") return;
+  put("provision", it.id, { ...it.data, paye: { annee: state().annee, mois: o.m, montant: Math.abs(o.montant) } });
+  toast(`« ${it.data.libelle || "Dépense annuelle"} » pointée payée en ${MOIS[o.m - 1].toLowerCase()}`);
 }
 // Ligne existante à laquelle une opération correspond.
 function matchInfo(S, m) {
@@ -1767,7 +2083,8 @@ function reportDupRow(S, o, i) {
   return `<div class="row rrow dup"><div class="rmain"><div class="main"><div class="t">${esc(o.libelle)}</div><div class="s">${opDate(o)} · relevé</div>
     ${mi.gone ? `<div class="rmatch">↳ ${esc(mi.titre)} · ${esc(mi.sub)}</div>` : `<button type="button" class="rmatch" data-edit="${o.match.kind}" data-id="${esc(o.match.id)}">↳ ${esc(mi.titre)} · ${esc(mi.sub)}</button>`}</div>
     <div class="amt ${o.montant > 0 ? "pos" : ""}">${o.montant > 0 ? "+" : ""}${eur2(Math.abs(o.montant))}</div></div>
-    <button type="button" class="btn ghost sm" data-radd="${i}">${o.match.how !== "ref" && o.match.kind === "charge" && !mi.gone ? "Relier à la charge" : "Ajouter quand même"}</button></div>`;
+    ${o.match.kind === "provision" && !mi.gone ? (provPaye(S, app.items.get(o.match.id).data) ? `<span class="pill ok">Payée</span>` : `<button type="button" class="btn sm" data-act="rpaye" data-i="${i}">Marquer payée</button>`) : ""}
+    <button type="button" class="btn ghost sm" data-radd="${i}">${reportLien(S, o) && !mi.gone ? (o.match.kind === "charge" ? "Relier à la charge" : "Relier au revenu") : "Ajouter quand même"}</button></div>`;
 }
 function reportHTML(S) {
   if (report.loading) return `<section class="card"><p class="empty">Lecture du relevé…</p></section>`;
@@ -1801,7 +2118,7 @@ function showReport() {
   refreshReport();
 }
 function refreshReport() { const box = $("#rres"); if (report && box) box.innerHTML = reportHTML(state()); }
-function closeReport() { report = null; $("#report").innerHTML = ""; document.body.style.overflow = sheet || search ? "hidden" : ""; }
+function closeReport() { report = null; $("#report").innerHTML = ""; document.body.style.overflow = sheet || search || tool ? "hidden" : ""; }
 
 /* ====================== Démarrage ====================== */
 async function boot() {
