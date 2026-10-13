@@ -186,19 +186,26 @@ function applyRemote(r, fromFlush) {
   if (r.updated_at && (!app.cursor || r.updated_at > app.cursor)) app.cursor = r.updated_at;
   saveLocal(); scheduleRender();
 }
-async function pull() {
+/* Reçoit les lignes modifiées depuis le curseur, avec 2 minutes de marge : une écriture de l'autre téléphone validée
+ * juste après une des nôtres (horodatage un peu plus ancien) n'est pas manquée. Une fois par jour, ou en touchant
+ * le badge de synchro (full), tout le foyer est relu, pour rattraper ce qui aurait pu échapper au temps réel. */
+async function pull(full) {
   if (app.mode !== "cloud" || !sb || !app.hid || !navigator.onLine) return;
   try {
-    let more = true;
-    while (more) {
+    if (Date.now() - LS.get(key("fullAt"), 0) > 864e5) full = true;
+    const t = Date.parse(app.cursor || "");
+    let since = full || isNaN(t) ? null : new Date(t - 120000).toISOString();
+    for (;;) {
       let q = sb.from("items").select("id,kind,data,deleted,updated_at").eq("household_id", app.hid).order("updated_at", { ascending: true }).limit(1000);
-      if (app.cursor) q = q.gte("updated_at", app.cursor);
+      if (since) q = q.gte("updated_at", since);
       const { data, error } = await q;
       if (error) throw error;
-      const before = app.cursor;
       (data || []).forEach(r => applyRemote(r, false));
-      more = data && data.length === 1000 && app.cursor !== before;
+      const last = data && data.length === 1000 ? data[999].updated_at : null;
+      if (!last || last === since) break;
+      since = last;
     }
+    if (full) LS.set(key("fullAt"), Date.now());
     if (app.sync === "err") app.sync = "ok";
     ensureCategories(); migrate(); // seulement une fois les données du foyer reçues, pour ne rien écraser
   } catch (e) { console.warn("pull", e); app.sync = "err"; }
@@ -370,12 +377,18 @@ function revMonth(S, r, m) {
   if (r.frequence === "Mensuel") { const p = revenuRecu(S).get(`${r.id}:${m}`); return p ? p.montant : num(r.montant); }
   return !revenuOf(S, r) && Number(r.mois) === m ? num(r.montant) : 0;
 }
+/* Dépenses hors enveloppe de la période : lignes du relevé rangées nulle part (« Relevé bancaire ») ou d'une enveloppe supprimée.
+ * Elles ne sont pas dans le budget des enveloppes mais sont bien sorties du compte : l'épargne possible les retire aussi. */
+function horsEnv(S, ms) {
+  const envs = new Set(S.enveloppes.map(e => e.id));
+  return S.depenses.filter(d => Number(d.annee) === Number(S.annee) && ms.includes(Number(d.mois)) && num(d.montant) && !envs.has(d.enveloppe) && !chargeOf(S, d));
+}
 function calc(S, m) {
   if (m === 0) {
     const cs = Array.from({ length: 12 }, (_, i) => calc(S, i + 1));
     const sum = k => cs.reduce((a, c) => a + c[k], 0);
     return { revenus: sum("revenus"), revReg: sum("revReg"), revPonct: sum("revPonct"), charges: sum("charges"), provisions: sum("provisions"), envPrevu: sum("envPrevu"), envReel: sum("envReel"),
-      env: sum("env"), rav: sum("rav"), epargne: sum("epargne"), resteEnv: sum("resteEnv") };
+      env: sum("env"), hors: sum("hors"), rav: sum("rav"), epargne: sum("epargne"), resteEnv: sum("resteEnv") };
   }
   const vir = sens => (S.virements || []).filter(v => v.sens === sens).reduce((a, v) => a + virM(v, [m]), 0); // vue d'un compte (forCompte)
   const revenus = S.revenus.reduce((a, r) => a + revMonth(S, r, m), 0) + vir("in");
@@ -385,9 +398,10 @@ function calc(S, m) {
   const provisions = provMonthTotal(S, m);
   const envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
   const envReel = S.enveloppes.reduce((a, e) => a + reel(S, e.id, m), 0);
+  const hors = horsEnv(S, [m]).reduce((a, d) => a + num(d.montant), 0);
   const rav = revenus - charges - provisions;
-  const epargne = rav - Math.max(envPrevu, envReel);
-  return { revenus, revReg, revPonct, charges, provisions, envPrevu, envReel, env: Math.max(envPrevu, envReel), rav, epargne, resteEnv: envPrevu - envReel };
+  const epargne = rav - Math.max(envPrevu, envReel) - hors;
+  return { revenus, revReg, revPonct, charges, provisions, envPrevu, envReel, env: Math.max(envPrevu, envReel), hors, rav, epargne, resteEnv: envPrevu - envReel };
 }
 /* Solde du livret mois par mois : + la mise de côté du mois, − les dépenses annuelles du mois (au mois et au montant payés si elles sont pointées).
  * Le livret ne passe jamais en négatif : s'il manque de l'argent un mois, ce qui manque est mis de côté en plus (rattrapage),
@@ -478,7 +492,7 @@ function exampleBanner(S) {
 
 function yearChart(S) {
   const cs = Array.from({ length: 12 }, (_, i) => calc(S, i + 1));
-  const part = c => [["Charges", c.charges, "--c-charges"], ["À mettre de côté", c.provisions, "--c-prov"], ["Enveloppes", c.env, "--c-env"], ["Épargne", Math.max(c.epargne, 0), "--c-epargne"]];
+  const part = c => [["Charges", c.charges, "--c-charges"], ["À mettre de côté", c.provisions, "--c-prov"], ["Enveloppes", c.env, "--c-env"], ["Hors enveloppe", c.hors, "--c-hors"], ["Épargne", Math.max(c.epargne, 0), "--c-epargne"]];
   const max = Math.max(...cs.map(c => part(c).reduce((a, [, v]) => a + v, 0)), 1);
   const cols = cs.map((c, i) => {
     const ps = part(c), tot = ps.reduce((a, [, v]) => a + v, 0);
@@ -486,7 +500,7 @@ function yearChart(S) {
     return `<button class="ycol" data-month="${i + 1}" aria-label="${label}" title="${label}"><div class="stack" style="height:${(tot / max * 100).toFixed(2)}%">${ps.map(([n, v, col]) => `<div style="flex:${v} 0 0;background:var(${col})"></div>`).join("")}</div><span>${MOIS[i][0]}</span></button>`;
   }).join("");
   return `<section class="card"><h2>Mois par mois<small>touchez un mois</small></h2><div class="ychart">${cols}</div>
-    <div class="ylegend">${[["Charges", "--c-charges"], ["De côté", "--c-prov"], ["Enveloppes", "--c-env"], ["Épargne", "--c-epargne"]].map(([n, col]) => `<span><i style="background:var(${col})"></i>${n}</span>`).join("")}</div></section>`;
+    <div class="ylegend">${[["Charges", "--c-charges"], ["De côté", "--c-prov"], ["Enveloppes", "--c-env"], ...(cs.some(c => c.hors > 0) ? [["Hors env.", "--c-hors"]] : []), ["Épargne", "--c-epargne"]].map(([n, col]) => `<span><i style="background:var(${col})"></i>${n}</span>`).join("")}</div></section>`;
 }
 function savingsChart(S) {
   const cum = []; let t = 0;
@@ -516,8 +530,9 @@ function vHome(S0) {
   const fc = filtreCompte(S0), S = forCompte(S0, fc); // l'accueil suit le filtre par compte (Dépenses, Analyse)
   const m = app.month, c = calc(S, m), nm = m ? MOIS[m - 1] : "Année", per = m ? "du mois" : "de l'année";
   const env = c.env;
-  const tot = Math.max(c.revenus, c.charges + c.provisions + env, 1);
-  const segs = [[(S.virements || []).some(v => v.sens === "out") ? "Charges et virement" : "Charges", c.charges, "--c-charges"], ["À mettre de côté", c.provisions, "--c-prov"], ["Enveloppes", env, "--c-env"], ["Épargne", Math.max(c.epargne, 0), "--c-epargne"]];
+  const tot = Math.max(c.revenus, c.charges + c.provisions + env + c.hors, 1);
+  const segs = [[(S.virements || []).some(v => v.sens === "out") ? "Charges et virement" : "Charges", c.charges, "--c-charges"], ["À mettre de côté", c.provisions, "--c-prov"], ["Enveloppes", env, "--c-env"],
+    ...(c.hors > 0 ? [["Hors enveloppe", c.hors, "--c-hors"]] : []), ["Épargne", Math.max(c.epargne, 0), "--c-epargne"]];
   const up = []; for (let k = 0; k < (m ? 3 : 12); k++) { const mm = m ? ((m - 1 + k) % 12) + 1 : k + 1; S.provisions.filter(p => Number(p.mois) === mm).forEach(p => up.push({ mm, p })); }
   const liv = Object.fromEntries(S.livrets.map(l => [l.id, l]));
   // Reste des enveloppes : comme dans Dépenses, budget commun face aux saisies du compte filtré
@@ -526,7 +541,9 @@ function vHome(S0) {
   ${monthsBar(S)}
   ${compteFilter(S0, fc)}
   ${exampleBanner(S0)}
-  <section class="card hero"><div class="label">Épargne possible${fc === "all" ? "" : " · " + esc(fc === "Joint" ? "compte joint" : fc.slice(6))}</div><div class="big">${eur(c.epargne)}</div><div class="sub">${c.revenus > 0 ? Math.round(c.epargne / c.revenus * 100) : 0} % des revenus ${per}${c.revPonct > 0 ? " · prime incluse" : ""}</div></section>
+  ${new Date().getFullYear() > S0.annee ? `<button class="card nudge" data-act="openYear"><span class="ico sm" style="background:#0E8A6D">🎉</span><span class="main"><b>Nouvelle année : passer le budget à ${S0.annee + 1}</b><small>Les livrets repartent de leur solde au 31 décembre</small></span>${ICON.chev}</button>` : ""}
+  <section class="card hero"><div class="label">Épargne possible${fc === "all" ? "" : " · " + esc(fc === "Joint" ? "compte joint" : fc.slice(6))}</div><div class="big">${eur(c.epargne)}</div><div class="sub">${c.revenus > 0 ? Math.round(c.epargne / c.revenus * 100) : 0} % des revenus ${per}${c.revPonct > 0 ? " · prime incluse" : ""}</div>
+    ${c.hors > 0 ? `<button type="button" class="hors" data-act="showHors">dont ${eur(c.hors)} de dépenses hors enveloppe ${ICON.chev}</button>` : ""}</section>
   <div class="duo">
     <section class="card"><div class="label t-prov"><span class="sw" style="background:var(--c-prov)"></span>De côté</div><div class="mid">${eur(c.provisions)}</div><div class="sub">${m ? "à virer sur les livrets" : "virés sur les livrets"}</div></section>
     <section class="card" data-tab="env" role="button"><div class="label t-env"><span class="sw" style="background:var(--c-env)"></span>Reste</div><div class="mid ${resteEnv < 0 ? "neg" : ""}">${eur(resteEnv)}</div><div class="sub">${eur(c.envReel)} sur ${eur(envPrevu)}</div></section>
@@ -931,6 +948,7 @@ function vSettings(S) {
     <p class="note" style="margin:8px 0 0">${esc(LOOKS.find(([k]) => k === app.look)[2])}</p></section>
   <section class="card"><h2>Budget</h2><div class="form">
     <label class="field"><span>Année</span><input id="s-annee" type="number" inputmode="numeric" value="${esc(S.annee)}" data-setting="annee"></label>
+    <button type="button" class="btn line block sm" data-act="openYear">Passer à ${S.annee + 1}…</button>
     <div class="two"><label class="field"><span>Personne 1</span><input id="s-p0" value="${esc(S.personnes[0])}" data-person="0"></label>
     <label class="field"><span>Personne 2</span><input id="s-p1" value="${esc(S.personnes[1])}" data-person="1"></label></div>
     <label class="field"><span>Répartition du compte joint</span><select id="s-rep" data-setting="repartition"><option value="prorata" ${S.repartition !== "egal" ? "selected" : ""}>Au prorata des salaires</option><option value="egal" ${S.repartition === "egal" ? "selected" : ""}>50 / 50</option></select></label>
@@ -1309,8 +1327,46 @@ function closeSearch() { search = null; $("#search").innerHTML = ""; document.bo
 
 /* ====================== Pages « À catégoriser » et « Pointage » ====================== */
 // Panneaux plein écran, comme la recherche. Ils montrent toujours tout le foyer (sans le filtre par compte).
-let tool = null; // {type: "tri", sens, open, done: [{kind, id, prev}]} ou {type: "point", m, only: "charge:id" | "revenu:id" | null}
-const TOOL_TITLES = { tri: "À catégoriser", point: "Pointage" };
+let tool = null; // {type: "tri", sens, open, done: [{kind, id, prev}]}, {type: "point", m, only: "charge:id" | "revenu:id" | null}, {type: "hors", m, fc, gone: [id]} ou {type: "annee"}
+const TOOL_TITLES = { tri: "À catégoriser", point: "Pointage", hors: "Hors enveloppe", annee: "Nouvelle année" };
+
+/* ---------- Hors enveloppe ---------- */
+// Dépenses de la période (et du compte filtré sur l'Accueil) rangées dans aucune enveloppe : à ranger, ou à supprimer si ce n'en sont pas.
+function horsHTML(S0) {
+  const S = forCompte(S0, tool.fc), ms = tool.m ? [tool.m] : ALL_MONTHS, L = horsEnv(S, ms), envName = Object.fromEntries(S0.enveloppes.map(e => [e.id, e.libelle]));
+  const gone = tool.gone.map(id => app.items.get(id)).filter(it => it && it.deleted);
+  const row = (d, isGone) => `<div class="row rrow${isGone ? " gone" : ""}"><button type="button" class="rmain" ${isGone ? "disabled" : `data-edit="depense" data-id="${esc(d.id)}"`}>${ico(catMeta(S0, depCat(S0, d)), "sm")}<div class="main"><div class="t">${esc(d.note || "Dépense")}</div><div class="s">${esc([shortDate(d.date), depLieu(S0, d, envName), compteCourt(depCompte(S0, d) || "") || d.par, isGone ? "supprimée" : ""].filter(Boolean).join(" · "))}</div></div><div class="amt">${eur2(d.montant)}</div></button>`
+    + (isGone ? `<button type="button" class="btn line sm" data-rundo="${esc(d.id)}">Rétablir</button>` : `<button type="button" class="iconbtn sm" data-rdel="${esc(d.id)}" aria-label="Supprimer ${esc(d.note || "la dépense")}">${ICON.trash}</button>`) + `</div>`;
+  const n = S0.enveloppes.length ? autoEnvable(S0, ms).length : 0;
+  const per = tool.m ? MOIS[tool.m - 1].toLowerCase() + " " + S0.annee : "l'année " + S0.annee;
+  return `<section class="card"><h2>${L.length ? eur2(sumOf(L.map(d => ({ montant: num(d.montant) })))) : "Rien"}<small>${plural(L.length, "ligne")} · ${esc(per)}${tool.fc === "all" ? "" : " · " + esc(compteCourt(tool.fc))}</small></h2>
+      <p class="note" style="margin-top:0">Ces dépenses ne sont dans aucune enveloppe, mais elles sont bien sorties du compte : l'épargne possible les retire. Touchez une ligne pour la ranger dans une enveloppe ou la relier à une charge. <b>Un virement vers un livret ou entre vos comptes n'est pas une dépense</b> : supprimez-le (corbeille), il est déjà compté dans « De côté » ou les virements.</p>
+      ${n ? `<button type="button" class="btn block sm" data-act="autoEnv" data-m="${tool.m}" style="margin-bottom:6px">Ranger ${plural(n, "dépense")} dans les enveloppes d'après l'historique</button>` : ""}
+      <div class="list">${L.map(d => row(d)).join("") || `<p class="empty">Toutes les dépenses de ${esc(per)} sont dans une enveloppe ou reliées à une charge.</p>`}${gone.map(it => row({ id: it.id, ...it.data }, true)).join("")}</div></section>`;
+}
+
+/* ---------- Nouvelle année ---------- */
+// Passer le budget à l'année suivante : les livrets repartent de leur solde projeté au 31 décembre.
+// Le reste suit tout seul : dépenses, revenus ponctuels, paiements reliés et pointages appartiennent à leur année.
+function anneeHTML(S) {
+  const ny = S.annee + 1;
+  const liv = S.livrets.map(l => { const fin = Math.round(livretStats(S, l).soldes[11] * 100) / 100; return `<label class="field"><span>${esc(l.nom)} <span class="muted">· ${eur(l.solde)} au 1er janv. ${S.annee}</span></span><div class="euro"><input id="ny-${esc(l.id)}" data-ny="${esc(l.id)}" inputmode="decimal" value="${esc(tool.vals[l.id] ?? String(fin).replace(".", ","))}"></div></label>`; }).join("");
+  return `<section class="card"><h2>Passer à ${ny}</h2>
+      <p class="note" style="margin-top:0">Le budget (revenus et charges mensuels, enveloppes, dépenses annuelles, catégories) est repris tel quel pour ${ny}. Les dépenses, revenus ponctuels, paiements reliés et pointages de ${S.annee} restent rattachés à ${S.annee} : vous les retrouvez en remettant ${S.annee} dans Réglages.</p>
+      ${backupNote()}<button type="button" class="btn ghost block" data-act="export">Exporter une sauvegarde de ${S.annee}</button></section>
+    ${S.livrets.length ? `<section class="card"><h2>Livrets au 1er janvier ${ny}<small>solde projeté</small></h2>
+      <p class="note" style="margin-top:0">Proposé : le solde prévu au 31 décembre ${S.annee}. Corrigez-le d'après votre banque si besoin.</p><div class="form">${liv}</div></section>` : ""}
+    <section class="card"><p class="note" style="margin-top:0">Pensez ensuite à revoir dans Budget les montants qui changent (salaires, loyer, assurances…).</p>
+      <button type="button" class="btn block" data-act="newYearGo">Passer le budget à ${ny}</button></section>`;
+}
+function newYear() {
+  const S = state(), ny = S.annee + 1;
+  document.querySelectorAll("#tool [data-ny]").forEach(el => { const it = app.items.get(el.dataset.ny); if (it && !it.deleted) put("livret", it.id, { ...it.data, solde: num(el.value) }); });
+  setSettings({ annee: ny });
+  app.month = new Date().getFullYear() === ny ? new Date().getMonth() + 1 : 1; render._scrolled = false;
+  closeTool(); app.tab = "home"; LS.set("bf:tab", "home"); window.scrollTo(0, 0); render();
+  toast(`Budget ${ny} : c'est parti`);
+}
 
 /* ---------- À catégoriser ---------- */
 // Lignes sans catégorie : dépenses de l'année, revenus et charges mensuelles (les paiements reliés comptent avec leur charge ou leur revenu).
@@ -1491,10 +1547,11 @@ function pointHTML(S) {
 
 function refreshTool() {
   const box = $("#tres"); if (!tool || !box) return;
-  box.innerHTML = tool.type === "tri" ? triHTML(state()) : pointHTML(state());
+  box.innerHTML = ({ tri: triHTML, point: pointHTML, hors: horsHTML, annee: anneeHTML })[tool.type](state());
 }
 function openTool(type, opts = {}) {
-  tool = type === "tri" ? { type, sens: "all", open: null, done: [] } : { type, m: opts.m || app.month || curMonth(state()) || 1, only: opts.only || null };
+  tool = type === "tri" ? { type, sens: "all", open: null, done: [] } : type === "hors" ? { type, m: opts.m, fc: opts.fc || "all", gone: [] }
+    : type === "annee" ? { type, vals: {} } : { type, m: opts.m || app.month || curMonth(state()) || 1, only: opts.only || null };
   $("#tool").innerHTML = `<div class="spanel" role="dialog" aria-modal="true" aria-label="${TOOL_TITLES[type]}">
     <div class="shead"><div class="col"><div class="srow"><h1 class="rtitle">${TOOL_TITLES[type]}</h1><button type="button" class="sclose" data-act="closeTool">Fermer</button></div></div></div>
     <div class="sbody"><div class="col" id="tres"></div></div></div>`;
@@ -1511,7 +1568,7 @@ document.addEventListener("click", async e => {
   const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq],[data-rdel],[data-rundo],[data-radd],[data-rcompte],[data-compte],[data-dcompte],[data-look]");
   if (!t) return;
   if (t.dataset.stype) { search.type = t.dataset.stype; refreshSearch(); return; }
-  if (t.dataset.rdel) { const it = app.items.get(t.dataset.rdel); if (it) del(it.kind, it.id); return; }
+  if (t.dataset.rdel) { const it = app.items.get(t.dataset.rdel); if (it) { del(it.kind, it.id); if (tool && tool.type === "hors") tool.gone.push(it.id); } return; }
   if (t.dataset.rundo) { const it = app.items.get(t.dataset.rundo); if (it) put(it.kind, it.id, it.data); return; }
   if (t.dataset.radd) { reportAddAnyway(Number(t.dataset.radd)); return; }
   if (t.dataset.rcompte) { reportPickCompte(t.dataset.rcompte); return; }
@@ -1549,6 +1606,9 @@ document.addEventListener("click", async e => {
     case "closeReport": closeReport(); break;
     case "closeTool": closeTool(); break;
     case "openTri": openTool("tri"); break;
+    case "showHors": openTool("hors", { m: app.month, fc: filtreCompte(state()) }); break;
+    case "openYear": openTool("annee"); break;
+    case "newYearGo": newYear(); break;
     case "openPoint": { const m = Number(t.dataset.m) || 0, only = t.dataset.only || null; if (sheet) closeSheet(); openTool("point", { m, only }); break; }
     case "triSens": tool.sens = t.dataset.sens; tool.open = null; refreshTool(); break;
     case "triMore": tool.open = t.dataset.id; refreshTool(); break;
@@ -1587,7 +1647,7 @@ document.addEventListener("click", async e => {
       toast(`${plural(list.length, "ligne")} rangée${list.length > 1 ? "s" : ""} · touchez-en une pour corriger`); break;
     }
     case "autoEnv": {
-      const S = state(), list = autoEnvable(S, app.month ? [app.month] : ALL_MONTHS);
+      const S = state(), m = "m" in t.dataset ? Number(t.dataset.m) : app.month, list = autoEnvable(S, m ? [m] : ALL_MONTHS);
       list.forEach(x => { const d = app.items.get(x.id).data; put("depense", x.id, { ...d, enveloppe: x.env, envAuto: true, ...(!depCat(S, d) && x.cat ? { categorie: x.cat, catAuto: true } : {}) }); });
       toast(`${plural(list.length, "dépense")} rangée${list.length > 1 ? "s" : ""} · touchez-en une pour corriger`); break;
     }
@@ -1619,12 +1679,13 @@ document.addEventListener("click", async e => {
     case "export": doExport(); break;
     case "shareCode": shareCode(); break;
     case "rotateCode": rotateCode(); break;
-    case "resync": if (app.mode === "cloud") { if (app.sync === "err") app.sync = "ok"; resync(); } toast(syncLabel()[1]); break;
+    case "resync": if (app.mode === "cloud") { if (app.sync === "err") app.sync = "ok"; toast(syncLabel()[1]); app.schemaOld = false; await flush(); await pull(true); toast(syncLabel()[1] + (app.sync === "ok" ? " · tout le foyer relu" : "")); } else toast(syncLabel()[1]); break;
   }
 });
 document.addEventListener("input", e => {
   const el = e.target;
   if (el.id === "q" && search) { search.q = el.value; refreshSearch(); return; }
+  if (el.dataset.ny && tool && tool.type === "annee") { tool.vals[el.dataset.ny] = el.value; return; } // gardé si l'écran se redessine
   if (el.dataset.f && sheet) {
     sheet.draft[el.dataset.f] = el.value;
     if (el.dataset.f === "categorie") sheet.draft._ct = true;
