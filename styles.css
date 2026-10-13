@@ -95,6 +95,11 @@ body::before{content:"";position:fixed;top:0;left:0;right:0;height:var(--sat);z-
 .list{display:flex;flex-direction:column}
 .row{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--line);text-align:left;width:100%}
 .row:first-child{border-top:0}
+.rcat{display:flex;align-items:center;gap:2px;padding:12px 0 4px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.rcat:first-child{padding-top:2px}
+.rcat b{flex:1;font-weight:inherit;min-width:0}
+.rcat small{font:600 12px var(--font);text-transform:none;letter-spacing:0}
+.rcat + .row{border-top:0}
 .row .main{flex:1;min-width:0}
 .row .t{font-weight:800;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .s{font-size:13px;color:var(--muted);overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
