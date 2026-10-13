@@ -294,10 +294,16 @@ function revenuRecu(S) {
   return P;
 }
 /* Dépense annuelle (provision) pointée « payée » cette année : p.paye = { annee, mois, montant }.
- * Elle sort du livret le mois du paiement (montant payé) et ne compte plus dans la mise de côté des mois suivants. */
+ * Le montant payé est réparti sur les mois jusqu'au paiement (inclus), puis elle ne compte plus : elle sort du livret ce mois-là. */
 const provPaye = (S, p) => (p.paye && Number(p.paye.annee) === Number(S.annee) && Number(p.paye.mois) >= 1 ? { mois: Number(p.paye.mois), montant: num(p.paye.montant) || num(p.montant) } : null);
-const provMonth = (S, p, m) => { const pp = provPaye(S, p); return pp && m > pp.mois ? 0 : num(p.montant) / 12; };
-const provTotal = (S, ms) => ms.reduce((a, m) => a + S.provisions.reduce((b, p) => b + provMonth(S, p, m), 0), 0);
+const provMonth = (S, p, m) => { const pp = provPaye(S, p); return pp ? (m <= pp.mois ? pp.montant / pp.mois : 0) : num(p.montant) / 12; };
+// Mise de côté d'un mois : celle des livrets (rattrapage compris, pour qu'aucun ne passe en négatif) et des dépenses annuelles sans livret.
+function provMonthTotal(S, m) {
+  const livs = new Set(S.livrets.map(l => l.id));
+  return S.livrets.reduce((a, l) => a + livretStats(S, l).mensM[m - 1], 0)
+    + S.provisions.filter(p => !livs.has(p.livret)).reduce((a, p) => a + provMonth(S, p, m), 0);
+}
+const provTotal = (S, ms) => ms.reduce((a, m) => a + provMonthTotal(S, m), 0);
 // Mois en cours si l'année du budget est l'année en cours (0 si elle est passée ou à venir : rien n'est « en retard »).
 const curMonth = S => (Number(S.annee) === new Date().getFullYear() ? new Date().getMonth() + 1 : Number(S.annee) < new Date().getFullYear() ? 12 : 0);
 // Une saisie garde sa catégorie ; les anciennes (sans choix) prennent celle de leur enveloppe.
@@ -349,22 +355,34 @@ function calc(S, m) {
   const revReg = S.revenus.filter(r => r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0) + vir("in");
   const revPonct = S.revenus.filter(r => r.frequence !== "Mensuel").reduce((a, r) => a + revMonth(S, r, m), 0);
   const charges = S.charges.reduce((a, c) => a + chargeMonth(S, c, m), 0) + vir("out");
-  const provisions = S.provisions.reduce((a, p) => a + provMonth(S, p, m), 0);
+  const provisions = provMonthTotal(S, m);
   const envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
   const envReel = S.enveloppes.reduce((a, e) => a + reel(S, e.id, m), 0);
   const rav = revenus - charges - provisions;
   const epargne = rav - Math.max(envPrevu, envReel);
   return { revenus, revReg, revPonct, charges, provisions, envPrevu, envReel, env: Math.max(envPrevu, envReel), rav, epargne, resteEnv: envPrevu - envReel };
 }
-// Solde du livret mois par mois : + la mise de côté du mois, − les dépenses annuelles du mois (au mois et au montant payés si elles sont pointées).
+/* Solde du livret mois par mois : + la mise de côté du mois, − les dépenses annuelles du mois (au mois et au montant payés si elles sont pointées).
+ * Le livret ne passe jamais en négatif : s'il manque de l'argent un mois, ce qui manque est mis de côté en plus (rattrapage),
+ * réparti sur les mois depuis janvier jusqu'à ce mois-là. */
+const livretCache = new WeakMap();
 function livretStats(S, l) {
+  let C = livretCache.get(S);
+  if (!C) livretCache.set(S, C = new Map());
+  if (C.has(l.id)) return C.get(l.id);
   const ps = S.provisions.filter(p => p.livret === l.id);
-  const mensM = ALL_MONTHS.map(m => ps.reduce((a, p) => a + provMonth(S, p, m), 0));
+  const base = ALL_MONTHS.map(m => ps.reduce((a, p) => a + provMonth(S, p, m), 0)), ratt = ALL_MONTHS.map(() => 0);
   const sortie = (p, m) => { const pp = provPaye(S, p); return pp ? (pp.mois === m ? pp.montant : 0) : (Number(p.mois) === m ? num(p.montant) : 0); };
   const soldes = []; let s = num(l.solde);
-  for (let m = 1; m <= 12; m++) { s += mensM[m - 1]; s -= ps.reduce((a, p) => a + sortie(p, m), 0); soldes.push(s); }
-  const bas = Math.min(...soldes);
-  return { mensM, soldes, bas, moisBas: soldes.indexOf(bas) + 1 };
+  for (let m = 1; m <= 12; m++) {
+    s += base[m - 1] - ps.reduce((a, p) => a + sortie(p, m), 0);
+    if (s < -.005) { const manque = -s; for (let k = 0; k < m; k++) { ratt[k] += manque / m; if (k < m - 1) soldes[k] += manque / m * (k + 1); } s = 0; }
+    soldes.push(s);
+  }
+  const mensM = base.map((v, i) => v + ratt[i]), bas = Math.min(...soldes), rattTot = ratt.reduce((a, v) => a + v, 0);
+  const st = { mensM, ratt, rattTot, rattFin: rattTot ? ratt.findLastIndex(v => v > .005) + 1 : 0, soldes, bas, moisBas: soldes.indexOf(bas) + 1 };
+  C.set(l.id, st);
+  return st;
 }
 function joint(S) {
   const ch = S.charges.filter(c => c.compte === "Joint").reduce((a, c) => a + num(c.montant), 0);
@@ -777,6 +795,8 @@ function vRec(S, per) {
   const rev = S.revenus.filter(r => r.frequence === "Mensuel").map(r => ({ k: "revenu", id: r.id, titre: r.libelle, montant: num(r.montant) * n, meta: catMeta(S, revenuCat(S, r)), sub: personneNom(r.personne) }));
   const ch = S.charges.map(c => ({ k: "charge", id: c.id, titre: c.libelle, montant: num(c.montant) * n, meta: catMeta(S, chargeCat(S, c)), sub: compteNom(c.compte) }));
   const pr = S.provisions.map(p => { const pp = provPaye(S, p); return { k: "provision", id: p.id, titre: p.libelle, montant: per.ms.reduce((a, m) => a + provMonth(S, p, m), 0), meta: { icone: "🐷", couleur: "#C28316" }, sub: `${MOIS[(Number(p.mois) || 1) - 1]} · ${eur(p.montant)} / an${pp ? ` · payée en ${MOIS[pp.mois - 1].toLowerCase()}` : ""}` }; });
+  const ratt = provTotal(S, per.ms) - sumOf(pr);
+  if (ratt > .005) pr.push({ k: "virement", id: "ratt", titre: "Rattrapage des livrets", montant: ratt, meta: { icone: "🐷", couleur: "#C28316" }, sub: "pour qu'aucun livret ne passe en négatif" });
   (S.virements || []).forEach(v => (v.sens === "in" ? rev : ch).push({ k: "virement", id: v.id, titre: v.titre, montant: v.montant * n, meta: catMeta(S, "_vir"), sub: "virement mensuel" }));
   const T = L => sumOf(L);
   const block = (title, L) => `<section class="card"><h2>${title}<small>${eurc(T(L))}</small></h2><div class="list">${[...L].sort((a, b) => b.montant - a.montant).map(it => `<button class="row" ${editAttr(it)}>${ico(it.meta, "sm")}<div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc([it.sub, it.meta.nom].filter(Boolean).join(" · "))}</div></div><div class="amt">${eurc(it.montant)}</div></button>`).join("") || `<p class="empty">Rien pour l'instant.</p>`}</div></section>`;
@@ -800,17 +820,17 @@ function spark(vals, m) {
 // Livrets et compte joint : toujours tout le foyer, sans le filtre par compte (Accueil, Dépenses, Analyse).
 function vLivrets(S) {
   const m = app.month, j = joint(S), c0 = calc(S, 1), mi = m || 12;
-  const anyNeg = S.livrets.some(l => livretStats(S, l).bas < 0);
+  const anyRatt = S.livrets.some(l => livretStats(S, l).rattTot > .005);
   const regC = { rev: c0.revReg, ch: S.charges.reduce((a, c) => a + num(c.montant), 0), pr: S.provisions.reduce((a, p) => a + num(p.montant) / 12, 0), en: c0.envPrevu }; // montants prévus, sans les paiements reliés ni les provisions pointées
   const ep = regC.rev - regC.ch - regC.pr - regC.en;
   return `${head("Livrets")}
   ${monthsBar(S)}
   <section class="card"><h2>Livrets de provisions<small>fin ${m ? MOIS[m - 1].toLowerCase() : "d'année"}</small></h2><div class="list">
-    ${S.livrets.map(l => { const st = livretStats(S, l), cur = st.soldes[mi - 1]; return `<button class="row" data-edit="livret" data-id="${l.id}"><div class="main"><div class="t">${esc(l.nom)}</div><div class="s">${eur(st.mensM[mi - 1])} / mois · point bas ${eur(st.bas)} (${MC[st.moisBas - 1]})</div><div style="margin-top:4px">${st.bas < 0 ? `<span class="pill neg">Manque ${eur(-st.bas)}</span>` : `<span class="pill ok">OK sur l'année</span>`}</div></div><div class="amt"><span class="${cur < 0 ? "neg" : ""}">${eur(cur)}</span>${spark(st.soldes, mi)}</div></button>`; }).join("") || `<p class="empty">Aucun livret.</p>`}
+    ${S.livrets.map(l => { const st = livretStats(S, l), cur = st.soldes[mi - 1]; return `<button class="row" data-edit="livret" data-id="${l.id}"><div class="main"><div class="t">${esc(l.nom)}</div><div class="s">${eur(st.mensM[mi - 1])} / mois · point bas ${eur(st.bas)} (${MC[st.moisBas - 1]})</div><div style="margin-top:4px">${st.rattTot > .005 ? `<span class="pill warn">+ ${eur(st.rattTot)} de rattrapage (janv. à ${MC[st.rattFin - 1].toLowerCase()})</span>` : `<span class="pill ok">OK sur l'année</span>`}</div></div><div class="amt"><span class="${cur < 0 ? "neg" : ""}">${eur(cur)}</span>${spark(st.soldes, mi)}</div></button>`; }).join("") || `<p class="empty">Aucun livret.</p>`}
     <button class="addrow" data-new="livret">${ICON.plus.replace("<svg", '<svg width="18" height="18"')} Ajouter un livret</button>
   </div>
   <div class="totals"><span>Virement total / mois</span><span>${eur(S.livrets.reduce((a, l) => a + livretStats(S, l).mensM[mi - 1], 0))}</span></div>
-  ${anyNeg ? `<p class="note">Un livret en négatif : la dépense arrive avant d'avoir été épargnée. Augmentez son solde de départ ou prévoyez un virement ponctuel.</p>` : ""}</section>
+  ${anyRatt ? `<p class="note">Rattrapage : une dépense arrive avant d'avoir été épargnée. Pour que le livret ne passe jamais en négatif, ce qui manque est mis de côté en plus sur les mois d'avant (compté dans « De côté »). Un solde de départ plus élevé l'évite.</p>` : ""}</section>
   <section class="card"><h2>Compte joint<small>${S.repartition === "egal" ? "50 / 50" : "au prorata des salaires"}</small></h2>
     ${j.pers.map(p => `<div class="kv"><span>${esc(p.nom)} vire <span class="muted">(${Math.round(p.part * 100)} %)</span></span><b>${eur(p.vir)}</b></div>`).join("")}
     <div class="kv total"><span>À couvrir chaque mois</span><b>${eur(j.besoin)}</b></div>
@@ -972,7 +992,7 @@ function renderSheet(first) {
       return `<label class="field"><span>${label}</span><input id="f-${f}" data-f="${f}" value="${esc(v)}" autocapitalize="sentences"></label>`;
     }).join("");
     if (k === "provision" && num(d.montant)) body += `<p class="note provm">À mettre de côté : <b>${eur(num(d.montant) / 12)}</b> par mois.</p>`;
-    if (k === "provision" && Number(d.payeMois)) body += `<p class="note">Payée : elle sort du livret en ${MOIS[Number(d.payeMois) - 1].toLowerCase()} et ne compte plus dans la mise de côté des mois suivants (${S.annee}).</p>`;
+    if (k === "provision" && Number(d.payeMois)) body += `<p class="note">Payée : le montant payé est réparti sur janvier à ${MOIS[Number(d.payeMois) - 1].toLowerCase()} (${eur((num(d.payeMontant) || num(d.montant)) / Number(d.payeMois))} par mois), il sort du livret ce mois-là et ne compte plus ensuite (${S.annee}).</p>`;
     if (k === "charge" && sheet.id) body += chargePayments(S, sheet.id);
     if (k === "revenu" && sheet.id && d.frequence === "Mensuel") body += revenuVersements(S, sheet.id);
     if (k === "revenu" && revenuOf(S, d)) body += `<p class="note">Versement de « ${esc(revenuOf(S, d).libelle || "revenu mensuel")} » : en ${MOIS[(Number(d.mois) || 1) - 1].toLowerCase()}, il remplace les ${eur(revenuOf(S, d).montant)} prévus (rien n'est compté deux fois).</p>`;
@@ -1368,7 +1388,7 @@ function pointHTML(S) {
     const etat = i.done ? `<span class="pill ok">${i.kind === "revenu" ? "Reçu" : i.kind === "charge" ? "Payée" : "Payée"}</span>` : `<span class="pill warn">À pointer</span>`;
     let body;
     if (i.kind === "provision") {
-      body = i.done ? `<div class="row rrow"><div class="rmain"><div class="main"><div class="t">Payée en ${MOIS[i.pp.mois - 1].toLowerCase()}</div><div class="s">ne compte plus dans la mise de côté des mois suivants</div></div><div class="amt">${eur2(i.pp.montant)}</div></div><button type="button" class="btn line sm" data-act="provUnpay" data-id="${esc(x.id)}">Annuler</button></div>`
+      body = i.done ? `<div class="row rrow"><div class="rmain"><div class="main"><div class="t">Payée en ${MOIS[i.pp.mois - 1].toLowerCase()}</div><div class="s">répartie sur janv. à ${MC[i.pp.mois - 1].toLowerCase()}, plus rien à mettre de côté ensuite</div></div><div class="amt">${eur2(i.pp.montant)}</div></div><button type="button" class="btn line sm" data-act="provUnpay" data-id="${esc(x.id)}">Annuler</button></div>`
         : pointCandidates(S, "provision", x, m).map(c => candRow(i, c)).join("") + `<button type="button" class="btn ghost block sm" data-act="provPaid" data-id="${esc(x.id)}" data-m="${m}">Marquer payée en ${MOIS[m - 1].toLowerCase()}</button>`;
     } else if (i.done) body = i.liens.map(d => lienRow(i, d)).join("");
     else {
@@ -1383,7 +1403,7 @@ function pointHTML(S) {
       <span class="plabel">${MOIS[m - 1]} ${S.annee}</span>
       <button class="iconbtn sm" data-act="pointMonth" data-dir="1" aria-label="Mois suivant" ${m >= 12 ? "disabled" : ""}>${ICON.next}</button></div>
       <div class="kv total"><span>Pointé</span><b>${nDone} / ${L.length}</b></div>
-      <p class="note" style="margin:0">Pour chaque revenu et charge du mois, retrouvez sa transaction (saisie ou importée du relevé) et reliez-la : son montant réel remplace le montant prévu. Une dépense annuelle pointée « payée » ne compte plus dans la mise de côté des mois suivants.</p>
+      <p class="note" style="margin:0">Pour chaque revenu et charge du mois, retrouvez sa transaction (saisie ou importée du relevé) et reliez-la : son montant réel remplace le montant prévu. Une dépense annuelle pointée « payée » est répartie sur les mois jusqu'au paiement, puis ne compte plus.</p>
       ${tool.only ? `<button type="button" class="btn line block sm" data-act="pointAll">Voir tout le pointage du mois</button>` : ""}</section>
     ${block("revenu", "Revenus mensuels")}${block("charge", "Charges mensuelles")}${block("provision", "Dépenses annuelles")}
     ${L.length ? "" : `<section class="card"><p class="empty">Rien à pointer en ${MOIS[m - 1].toLowerCase()} : ajoutez des revenus mensuels, des charges ou des dépenses annuelles dans Budget.</p></section>`}`;
