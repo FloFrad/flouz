@@ -581,12 +581,11 @@ function vCategories(S) {
 function vBudget(S) {
   const seg = app.seg;
   if (seg === "categorie") return vCategories(S);
-  const L = { revenu: S.revenus, charge: S.charges, provision: S.provisions, enveloppe: S.enveloppes }[seg] || [];
   const rowOf = {
     revenu: r => { const rm = revenuOf(S, r); return [r.libelle, `${personneNom(r.personne)} · ${r.frequence === "Mensuel" ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]}${rm ? " · versement de « " + (rm.libelle || "revenu mensuel") + " »" : ""}`, eur(r.montant), r.frequence === "Mensuel" ? "/ mois" : rm ? "reçu" : "ponctuel"]; },
     charge: c => [c.libelle, compteNom(c.compte), eur(c.montant), "/ mois"], // la catégorie est dans le sous-titre du groupe
     provision: p => { const pp = provPaye(S, p), late = !pp && Number(p.mois) <= curMonth(S); return [p.libelle, `${MOIS[(Number(p.mois) || 1) - 1]}${pp ? ` · payée en ${MOIS[pp.mois - 1].toLowerCase()}` : late ? " · à pointer" : ""}`, eur(num(p.montant) / 12), `/ mois · ${eur(p.montant)} an`]; },
-    enveloppe: e => [e.libelle, `budget mensuel · ${catMeta(S, envCat(S, e)).nom}`, eur(e.prevu), "/ mois"]
+    enveloppe: e => [e.libelle, "budget mensuel", eur(e.prevu), "/ mois"]
   }[seg];
   const total = {
     revenu: ["Revenus réguliers / mois", eur(S.revenus.filter(r => r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0))],
@@ -602,19 +601,12 @@ function vBudget(S) {
   }[seg];
   const addLabel = { revenu: "Ajouter un revenu", charge: "Ajouter une charge", provision: "Ajouter une dépense annuelle", enveloppe: "Ajouter une enveloppe" }[seg];
   const row = it => { const [t, s, a, as] = rowOf(it); return `<button class="row" data-edit="${seg}" data-id="${it.id}"><div class="main"><div class="t">${esc(t) || "<span class='muted'>Sans nom</span>"}</div><div class="s">${esc(s)}</div></div><div class="amt">${a}<small>${as}</small></div>${ICON.chev}</button>`; };
-  if (seg !== "enveloppe") return `${head("Budget")}
+  return `${head("Budget")}
   ${segBar(seg)}
   <p class="note" style="margin:0">${help}</p>
   ${budgetGroupes(S, seg, row)}
   <section class="card"><div class="list"><button class="addrow" data-new="${seg}" style="border-top:0">${ICON.plus.replace("<svg", '<svg width="18" height="18"')} ${addLabel}</button></div>
   <div class="totals"><span>${total[0]}</span><span>${total[1]}</span></div></section>`;
-  return `${head("Budget")}
-  ${segBar(seg)}
-  <p class="note" style="margin:0">${help}</p>
-  <section class="card"><div class="list">
-    ${L.length ? L.map(row).join("") : `<p class="empty">Rien pour l'instant.</p>`}
-    <button class="addrow" data-new="${seg}">${ICON.plus.replace("<svg", '<svg width="18" height="18"')} ${addLabel}</button>
-  </div><div class="totals"><span>${total[0]}</span><span>${total[1]}</span></div></section>`;
 }
 // Budget : une carte de lignes rangées par groupe (catégorie ou livret, dans l'ordre de leur page ; « À catégoriser » / « Sans livret » en dernier),
 // chaque groupe trié par mois puis par libellé. g = { cle, ordre (clés), meta(clé), mois(ligne), montant(ligne) }.
@@ -632,20 +624,21 @@ function carteGroupee(titre, L, unite, g, row) {
   }).join("");
   return `<section class="card"><h2>${titre}<small>${tot(L)} ${unite}</small></h2><div class="list">${body}</div></section>`;
 }
-const parCat = (S, sens, catOf) => ({
-  cle: x => catOf(S, x), ordre: S.categories.filter(c => c.sens === sens).map(c => c.id), meta: k => catMeta(S, k), montant: x => num(x.montant),
+const parCat = (S, sens, catOf, montant = x => num(x.montant)) => ({
+  cle: x => catOf(S, x), ordre: S.categories.filter(c => c.sens === sens).map(c => c.id), meta: k => catMeta(S, k), montant,
   mois: x => (x.frequence && x.frequence !== "Mensuel" ? Number(x.mois) || 1 : 0) // revenu mensuel, charge : pas de mois
 });
 const parLivret = S => ({
   cle: p => (S.livrets.some(l => l.id === p.livret) ? p.livret : ""), ordre: S.livrets.map(l => l.id), montant: p => num(p.montant) / 12, mois: p => Number(p.mois) || 1,
   meta: k => ({ nom: S.livrets.find(l => l.id === k)?.nom || "Sans livret", icone: "🐷", couleur: k ? "#C28316" : "#94A3B8" })
 });
-// Budget › Revenus : mensuels puis ponctuels, par catégorie. Charges : par catégorie. Provisions : par livret.
+// Budget › Revenus : mensuels puis ponctuels, par catégorie. Charges : par catégorie. Provisions : par livret. Enveloppes : par catégorie.
 const budgetGroupes = (S, seg, row) => ({
   revenu: () => carteGroupee("Revenus mensuels", S.revenus.filter(r => r.frequence === "Mensuel"), "/ mois", parCat(S, "revenu", revenuCat), row)
     + carteGroupee("Revenus ponctuels", S.revenus.filter(r => r.frequence !== "Mensuel"), "sur l'année", parCat(S, "revenu", revenuCat), row),
   charge: () => carteGroupee("Charges mensuelles", S.charges, "/ mois", parCat(S, "depense", chargeCat), row),
-  provision: () => carteGroupee("Dépenses annuelles", S.provisions, "/ mois", parLivret(S), row)
+  provision: () => carteGroupee("Dépenses annuelles", S.provisions, "/ mois", parLivret(S), row),
+  enveloppe: () => carteGroupee("Enveloppes", S.enveloppes, "/ mois", parCat(S, "depense", envCat, e => num(e.prevu)), row)
 })[seg]();
 
 /* ====================== Analyse ====================== */
