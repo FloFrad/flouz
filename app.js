@@ -102,10 +102,21 @@ const app = {
   month: new Date().getMonth() + 1,
   dcompte: LS.get("bf:dcompte", "all"), // filtre par compte des saisies (onglet Dépenses)
   aseg: LS.get("bf:aseg", "all"), aview: LS.get("bf:aview", "cat"), aopen: null, // onglet Analyse
+  look: LS.get("bf:look", "ios"), // apparence de ce téléphone (Réglages › Apparence)
   schemaOld: false,           // la base n'accepte pas encore le type « categorie » (SQL pas mis à jour)
   sync: "ok", channel: null, flushing: false, seq: 0,
   email: LS.get("bf:email", ""), signup: false, authErr: "", busy: false
 };
+
+// Apparences : « classique » (d'origine) et trois styles aérés inspirés d'Apple (classe .airy commune).
+const LOOKS = [["ios", "Réglages", "Listes groupées sur fond gris, comme l'app Réglages : sobre et très lisible."], ["sante", "Santé", "Cartes résumé avec un titre en couleur et de grands chiffres, comme l'app Santé."], ["epure", "Épuré", "Fond blanc sans cartes, séparateurs fins et gros montants, comme Apple Card."], ["classique", "Classique", "Cartes pastel de la première version."]];
+function applyLook() {
+  if (!LOOKS.some(([k]) => k === app.look)) app.look = "ios";
+  const r = document.documentElement;
+  r.dataset.look = app.look;
+  r.classList.toggle("airy", app.look !== "classique");
+}
+applyLook();
 
 /* ====================== Stockage local ====================== */
 const key = k => `bf:${app.hid}:${k}`;
@@ -899,6 +910,9 @@ function vSettings(S) {
     <div class="btnrow"><button class="btn ghost" data-act="shareCode">Partager le code</button><button class="btn line" data-act="rotateCode">Nouveau code</button></div>
     <div class="list" style="margin-top:10px">${app.members.map(mb => `<div class="row"><div class="main"><div class="t">${esc(mb.display_name || "Membre")}${mb.user_id === app.user?.id ? ' <span class="muted">(vous)</span>' : ""}</div></div></div>`).join("")}</div>
   </section>`}
+  <section class="card"><h2>Apparence<small>sur ce téléphone</small></h2>
+    <div class="seg" role="group" aria-label="Apparence">${LOOKS.map(([k, l]) => `<button data-look="${k}" aria-pressed="${app.look === k}">${l}</button>`).join("")}</div>
+    <p class="note" style="margin:8px 0 0">${esc(LOOKS.find(([k]) => k === app.look)[2])}</p></section>
   <section class="card"><h2>Budget</h2><div class="form">
     <label class="field"><span>Année</span><input id="s-annee" type="number" inputmode="numeric" value="${esc(S.annee)}" data-setting="annee"></label>
     <div class="two"><label class="field"><span>Personne 1</span><input id="s-p0" value="${esc(S.personnes[0])}" data-person="0"></label>
@@ -1469,7 +1483,7 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = fal
 function go(screen) { app.screen = screen; app.authErr = ""; render(); }
 
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq],[data-rdel],[data-rundo],[data-radd],[data-rcompte],[data-compte],[data-dcompte]");
+  const t = e.target.closest("[data-act],[data-tab],[data-month],[data-seg],[data-edit],[data-new],[data-chip],[data-catchip],[data-pick],[data-aseg],[data-aview],[data-opencat],[data-step],[data-stype],[data-sq],[data-rdel],[data-rundo],[data-radd],[data-rcompte],[data-compte],[data-dcompte],[data-look]");
   if (!t) return;
   if (t.dataset.stype) { search.type = t.dataset.stype; refreshSearch(); return; }
   if (t.dataset.rdel) { const it = app.items.get(t.dataset.rdel); if (it) del(it.kind, it.id); return; }
@@ -1483,6 +1497,7 @@ document.addEventListener("click", async e => {
     if (!d._ct) { const S = state(); d.categorie = noteCat(S, d.note, "depense") || envCat(S, S.enveloppes.find(x => x.id === d.enveloppe)); } // la catégorie suit la note ou l'enveloppe tant qu'on n'a pas choisi
     renderSheet(); return;
   }
+  if (t.dataset.look) { app.look = t.dataset.look; LS.set("bf:look", app.look); applyLook(); render(); return; }
   if (t.dataset.dcompte) { app.dcompte = t.dataset.dcompte; LS.set("bf:dcompte", app.dcompte); render(); return; }
   if (t.dataset.compte) { sheet.draft.compte = t.dataset.compte; renderSheet(); return; }
   if (t.dataset.catchip) { const d = sheet.draft; d.categorie = d.categorie === t.dataset.catchip ? "" : t.dataset.catchip; d._ct = true; renderSheet(); return; }

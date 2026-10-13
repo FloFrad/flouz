@@ -338,3 +338,132 @@ div.rmatch{color:var(--muted)}
   .sync{padding:10px}
   .sync span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 }
+
+/* =====================================================================
+   Apparences aérées inspirées d'Apple (Réglages › Apparence).
+   .airy = base commune (typo plus légère, plus d'espace, contrôles iOS) ;
+   [data-look] = Réglages (ios), Santé (sante), Épuré (epure).
+   « Classique » n'a pas la classe .airy et garde le style d'origine.
+   ===================================================================== */
+:root.airy{
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,"Segoe UI",Roboto,sans-serif;
+  --font-d:-apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",system-ui,"Segoe UI",Roboto,sans-serif;
+  --bg:#F2F2F7; --surface:#FFFFFF; --surface-2:#F2F2F7; --ink:#1C1C1E; --muted:#6C6C70; --line:#E5E5EA;
+  --field:#FFFFFF; --field-line:#D1D1D6;
+  --p-mint:#FFFFFF; --p-peach:#FFFFFF; --p-lilac:#FFFFFF; --p-sky:#E9E9EE; --p-ink:#1C1C1E;
+  --seg-track:rgba(118,118,128,.12); --seg-on:#FFFFFF;
+  --shadow:none; --r:18px;
+}
+:root.airy[data-look="sante"]{--font-d:ui-rounded,"SF Pro Rounded",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;--r:16px}
+:root.airy[data-look="epure"]{--bg:#FFFFFF;--surface:#FFFFFF;--surface-2:#F5F5F7;--ink:#111113;--muted:#6E6E73;--line:#E8E8ED;--field:#F5F5F7;--field-line:#F5F5F7;--p-sky:#EDEDF0}
+@media (prefers-color-scheme: dark){
+  :root.airy{
+    --bg:#000000; --surface:#1C1C1E; --surface-2:#2C2C2E; --ink:#F2F2F7; --muted:#98989F; --line:#38383A;
+    --field:#1C1C1E; --field-line:#38383A;
+    --p-mint:#1C1C1E; --p-peach:#1C1C1E; --p-lilac:#1C1C1E; --p-sky:#2C2C2E; --p-ink:#F2F2F7;
+    --seg-track:rgba(118,118,128,.24); --seg-on:#636366; --tab-edge:inset 0 0 0 .5px #38383A;
+  }
+  :root.airy[data-look="epure"]{--bg:#000000;--surface:#000000;--surface-2:#1C1C1E;--line:#2C2C2E;--field:#1C1C1E;--field-line:#1C1C1E;--p-sky:#2C2C2E}
+}
+
+/* ---------- base commune ---------- */
+:root.airy,.airy body{font-size:16px;line-height:1.4;letter-spacing:-.01em}
+.airy .col{gap:16px}
+.airy .head{padding-top:10px;margin-bottom:-2px}
+.airy .head h1{font-size:clamp(26px,8vw,34px);font-weight:700;letter-spacing:-.02em;overflow:hidden;text-overflow:ellipsis}
+.airy .head .yr{font-weight:500}
+.airy .iconbtn{background:var(--seg-track)}
+.airy .sync{background:transparent;padding:4px 6px}
+
+.airy .card{padding:16px 18px}
+.airy .card h2{font-size:18px;font-weight:600;letter-spacing:-.015em;margin-bottom:8px}
+.airy .card h2 small{font:400 14px var(--font);letter-spacing:0}
+.airy .label{text-transform:none;letter-spacing:0;font-size:14px;font-weight:500}
+.airy .big{font-size:44px;font-weight:700;letter-spacing:-.025em;margin:2px 0}
+.airy .mid{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:2px 0}
+.airy .sub,.airy .note{font-size:14px}
+.airy .hero{border-radius:var(--r);padding:20px 18px}
+.airy .hero .label,.airy .hero .sub,.airy .duo .card .label,.airy .duo .card .sub{color:var(--muted);opacity:1}
+.airy .duo{gap:12px}
+.airy .duo .card,.airy .duo .card:first-child,.airy .duo .card:last-child{background:var(--surface);padding:16px}
+
+.airy .row{gap:14px;padding:12px 0}
+.airy .row .t{font-weight:500;font-size:16px}
+.airy .row .s{font-size:14px;margin-top:1px}
+.airy .row .amt{font-weight:600;font-size:16px}
+.airy .row .amt small{font-size:13px;font-weight:400;margin-top:1px}
+.airy .row.sm .t{font-weight:400}
+.airy .rcat{text-transform:none;letter-spacing:0;font-size:14px;font-weight:600;padding:18px 0 4px;gap:4px}
+.airy .rcat small{font-size:14px;font-weight:400}
+.airy .acct{font-weight:500}
+
+.airy .bar{height:6px;margin-top:8px}
+.airy .flow{height:10px;gap:2px;margin:10px 0 14px}
+.airy .legend{gap:12px 16px}
+.airy .legend .it{border-left-width:2px;padding-left:10px}
+.airy .legend b{font-weight:600}
+.airy .legend span{font-size:13px}
+.airy .totals,.airy .kv.total{background:var(--surface-2);color:var(--ink);font-weight:600;border-radius:12px}
+.airy .totals{margin-top:12px;padding:12px 14px}
+.airy .kv{padding:10px 0}
+.airy .code{background:var(--surface-2)}
+.airy .tip{background:var(--surface-2)}
+.airy .banner{border-radius:var(--r);padding:14px 16px}
+
+/* contrôles segmentés et mois façon iOS */
+.airy .seg,.airy .aseg{background:var(--seg-track);border:0;border-radius:99px;padding:2px;gap:0}
+.airy .seg button,.airy .aseg button{font-size:14px;font-weight:500;color:var(--ink);padding:7px 10px}
+.airy .seg button[aria-pressed="true"],.airy .aseg button[aria-pressed="true"]{background:var(--seg-on);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12),0 0 0 .5px rgba(0,0,0,.04)}
+.airy .aseg button.ov{color:var(--muted)}
+.airy .months{gap:2px}
+.airy .months button{background:transparent;font-size:15px;font-weight:500;padding:6px 12px}
+.airy .months button[aria-pressed="true"]{background:var(--ink);color:var(--bg);font-weight:600}
+.airy .months + .dfilter{margin:0}
+.airy .period{gap:12px;padding:12px 14px}
+.airy .plabel{font-weight:600}
+
+.airy .btn{font-weight:600;border-radius:14px}
+.airy .btn.line{border-width:1px}
+.airy .addrow{font-weight:500}
+.airy .chips button{font-weight:500}
+.airy .nudge b{font-weight:600}
+.airy .field input,.airy .field select{border-radius:12px}
+.airy .panel .ph h2{font-weight:600}
+
+/* barre d'onglets en verre */
+.airy .tabbar{background:color-mix(in srgb,var(--surface) 72%,transparent);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);box-shadow:var(--tab-edge,0 0 0 .5px rgba(0,0,0,.06)),0 8px 30px rgba(0,0,0,.12)}
+.airy .tabbar button{font-weight:600;font-size:10.5px}
+.airy .tabbar .fab{box-shadow:0 4px 12px color-mix(in srgb,var(--accent) 35%,transparent)}
+
+/* ---------- Santé : titre de carte en couleur, chiffres arrondis ---------- */
+[data-look="sante"] .card h2{color:var(--accent);font-size:16px}
+[data-look="sante"] .card h2 small{color:var(--muted)}
+[data-look="sante"] .label{font-size:15px;font-weight:600;color:var(--accent)}
+[data-look="sante"] .label .sw{display:none}
+[data-look="sante"] .hero .label{color:var(--c-epargne)}
+[data-look="sante"] .duo .card:first-child .label{color:var(--c-prov)}
+[data-look="sante"] .duo .card:last-child .label{color:var(--c-env)}
+[data-look="sante"] .big{font-size:48px;font-weight:700}
+[data-look="sante"] .mid{font-size:28px;font-weight:700}
+[data-look="sante"] .row .amt,[data-look="sante"] .legend b,[data-look="sante"] .totals,[data-look="sante"] .kv b{font-family:var(--font-d)}
+[data-look="sante"] .rcat{color:var(--ink)}
+
+/* ---------- Épuré : pas de cartes, séparateurs fins ---------- */
+[data-look="epure"] .col{gap:4px}
+[data-look="epure"] .head{margin-bottom:6px}
+[data-look="epure"] .card,[data-look="epure"] .hero{background:transparent;border-radius:0;padding:18px 0 20px;border-bottom:1px solid var(--line)}
+[data-look="epure"] .col > .card:last-child{border-bottom:0}
+[data-look="epure"] .card h2{font-size:20px;font-weight:700}
+[data-look="epure"] .hero{padding-top:8px}
+[data-look="epure"] .big{font-size:56px;font-weight:700;letter-spacing:-.035em}
+[data-look="epure"] .duo{padding:18px 0 20px;border-bottom:1px solid var(--line)}
+[data-look="epure"] .duo .card,[data-look="epure"] .duo .card:first-child,[data-look="epure"] .duo .card:last-child{background:transparent;padding:0;border:0}
+[data-look="epure"] .duo .card:last-child{padding-left:14px;border-left:1px solid var(--line)}
+[data-look="epure"] .card.nudge{background:var(--surface-2);border:0;border-radius:16px;padding:14px 16px;margin:12px 0}
+[data-look="epure"] .bar i{background:var(--ink)}
+[data-look="epure"] .bar.over i{background:var(--neg)}
+[data-look="epure"] .period{padding:6px 0 18px}
+[data-look="epure"] .seg,[data-look="epure"] .aseg{background:var(--surface-2)}
+[data-look="epure"] .seg button[aria-pressed="true"],[data-look="epure"] .aseg button[aria-pressed="true"]{background:var(--seg-on)}
+@media (prefers-color-scheme: dark){[data-look="epure"] .seg button[aria-pressed="true"],[data-look="epure"] .aseg button[aria-pressed="true"]{background:#3A3A3C}}
+[data-look="epure"] .iconbtn{background:var(--surface-2)}
