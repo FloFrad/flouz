@@ -140,7 +140,9 @@ L'app apprend de ce que vous avez déjà rangé : aucun réglage, rien n'est env
 - **Pause Supabase** : l'offre gratuite met en pause un projet resté **7 jours sans aucune activité**. Avec un usage normal, ça n'arrive pas ; sinon, un clic sur *Restore* dans la console Supabase.
 - **Modifications en même temps** : chaque ligne (une dépense, une charge…) est synchronisée séparément. Deux personnes peuvent saisir en même temps sans rien perdre ; si les deux modifient exactement la même ligne, la dernière modification gagne.
 - **Hors ligne** : les saisies restent sur le téléphone (« Hors ligne · n en attente ») et partent automatiquement au retour du réseau.
-- **Sauvegarde** : Réglages → Exporter, de temps en temps.
+- **Sauvegarde** : Réglages → Exporter, de temps en temps (Réglages affiche la date du dernier export de ce téléphone). Importer une sauvegarde demande confirmation, puis remplace le budget en gardant tous les champs (compte, pointages, lignes de relevé…).
+- **Changement d'année** : un revenu ponctuel (prime, salaire importé du relevé, remboursement…) appartient à son année ; en passant à l'année suivante dans Réglages, il ne compte plus. Les revenus et charges mensuels, enveloppes, provisions et livrets restent ; pensez à mettre à jour le solde des livrets au 1er janvier.
+- **Badge de synchro** : en haut à droite. Sur iPhone, seule la pastille s'affiche quand tout est envoyé ; sinon un texte court (« Hors ligne · 2 », « Erreur »). Touchez-le pour relancer l'envoi.
 - **Mode démo** : sans configuration, l'écran d'accueil propose d'essayer l'app avec l'exemple, données gardées sur le téléphone uniquement.
 
 ## Contenu du dossier
