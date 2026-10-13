@@ -330,7 +330,7 @@ function flows(S, ms) {
     const recu = nRecu ? (ms.length > 1 ? ` · ${nRecu} reçu${nRecu > 1 ? "s" : ""}` : " · reçu") : "";
     if (v) inn.push({ k: "revenu", id: r.id, montant: v, cat: revenuCat(S, r), fixe: mensuel, titre: r.libelle || "Revenu", sub: `${personneNom(r.personne)} · ${mensuel ? "chaque mois" : MOIS[(Number(r.mois) || 1) - 1]}${recu}` });
   });
-  (S.virements || []).forEach(v => (v.sens === "in" ? inn : out).push({ k: "virement", id: v.id, montant: v.montant * ms.length, cat: "_vir", fixe: true, titre: v.titre, sub: ms.length > 1 ? "Virement mensuel · 12 mois" : "Virement mensuel" }));
+  (S.virements || []).forEach(v => (v.sens === "in" ? inn : out).push({ k: "virement", id: v.id, montant: virM(v, ms), cat: "_vir", fixe: true, titre: v.titre, sub: ms.length > 1 ? "Virement mensuel · 12 mois" : "Virement mensuel" }));
   return { out, inn };
 }
 const sumOf = list => list.reduce((a, x) => a + x.montant, 0);
@@ -350,7 +350,7 @@ function calc(S, m) {
     return { revenus: sum("revenus"), revReg: sum("revReg"), revPonct: sum("revPonct"), charges: sum("charges"), provisions: sum("provisions"), envPrevu: sum("envPrevu"), envReel: sum("envReel"),
       env: sum("env"), rav: sum("rav"), epargne: sum("epargne"), resteEnv: sum("resteEnv") };
   }
-  const vir = sens => (S.virements || []).filter(v => v.sens === sens).reduce((a, v) => a + v.montant, 0); // vue d'un compte (forCompte)
+  const vir = sens => (S.virements || []).filter(v => v.sens === sens).reduce((a, v) => a + virM(v, [m]), 0); // vue d'un compte (forCompte)
   const revenus = S.revenus.reduce((a, r) => a + revMonth(S, r, m), 0) + vir("in");
   const revReg = S.revenus.filter(r => r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0) + vir("in");
   const revPonct = S.revenus.filter(r => r.frequence !== "Mensuel").reduce((a, r) => a + revMonth(S, r, m), 0);
@@ -384,18 +384,29 @@ function livretStats(S, l) {
   C.set(l.id, st);
   return st;
 }
-function joint(S) {
-  const ch = S.charges.filter(c => c.compte === "Joint").reduce((a, c) => a + num(c.montant), 0);
-  const prov = S.provisions.reduce((a, p) => a + num(p.montant) / 12, 0);
+/* Virements vers le compte joint d'un mois, d'après la réalité de ce mois : charges du joint à leur montant payé (paiement relié),
+ * mise de côté réelle des livrets (sans les dépenses annuelles déjà pointées payées, rattrapage compris), revenus mensuels
+ * à leur montant reçu (versement relié), pour le besoin comme pour le prorata des salaires. */
+const jointCache = new WeakMap();
+function joint(S, m) {
+  m = m || curMonth(S) || 1;
+  let C = jointCache.get(S);
+  if (!C) jointCache.set(S, C = new Map());
+  if (C.has(m)) return C.get(m);
+  const ch = S.charges.filter(c => c.compte === "Joint").reduce((a, c) => a + chargeMonth(S, c, m), 0);
+  const prov = provMonthTotal(S, m);
   const env = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
   const ep = num(S.epargneCommune);
-  const commun = S.revenus.filter(r => r.personne === "Commun" && r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0);
+  const regM = r => (r.frequence === "Mensuel" ? revMonth(S, r, m) : 0);
+  const commun = S.revenus.filter(r => r.personne === "Commun").reduce((a, r) => a + regM(r), 0);
   const besoin = ch + prov + env + ep - commun;
-  const sal = S.personnes.map(p => S.revenus.filter(r => r.personne === p && r.frequence === "Mensuel").reduce((a, r) => a + num(r.montant), 0));
+  const sal = S.personnes.map(p => S.revenus.filter(r => r.personne === p).reduce((a, r) => a + regM(r), 0));
   const tot = sal[0] + sal[1];
   const parts = S.repartition === "egal" || tot === 0 ? [.5, .5] : [sal[0] / tot, sal[1] / tot];
-  const pers = S.personnes.map((p, i) => { const vir = besoin * parts[i]; const perso = S.charges.filter(c => c.compte === "Perso " + p).reduce((a, c) => a + num(c.montant), 0); return { nom: p, sal: sal[i], part: parts[i], vir, perso, reste: sal[i] - vir - perso }; });
-  return { ch, prov, env, ep, commun, besoin, pers };
+  const pers = S.personnes.map((p, i) => { const vir = besoin * parts[i]; const perso = S.charges.filter(c => c.compte === "Perso " + p).reduce((a, c) => a + chargeMonth(S, c, m), 0); return { nom: p, sal: sal[i], part: parts[i], vir, perso, reste: sal[i] - vir - perso }; });
+  const j = { m, ch, prov, env, ep, commun, besoin, pers };
+  C.set(m, j);
+  return j;
 }
 
 /* ====================== Rendu ====================== */
@@ -728,8 +739,8 @@ function evolution(S, mode) {
 
 function vOverview(S, per, out, totIn, totOut) {
   const n = per.ms.length, bal = totIn - totOut;
-  const chFix = S.charges.reduce((a, c) => a + num(c.montant), 0) + virOut(S), envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
-  const budget = (chFix + envPrevu) * n, left = budget - totOut;
+  const chFix = S.charges.reduce((a, c) => a + num(c.montant), 0), envPrevu = S.enveloppes.reduce((a, e) => a + num(e.prevu), 0);
+  const budget = (chFix + envPrevu) * n + virOut(S, per.ms), left = budget - totOut;
   const prov = provTotal(S, per.ms);
   const objectif = totIn - budget - prov, reelEp = totIn - totOut - prov;
   const mx = Math.max(totIn, totOut, 1), h = v => Math.max(Math.round(v / mx * 150), 26);
@@ -755,7 +766,7 @@ function vFlow(S, per, sens, list, total) {
   const n = per.ms.length;
   let budgetCard = "";
   if (sens === "depense") {
-    const budget = (S.charges.reduce((a, c) => a + num(c.montant), 0) + virOut(S) + S.enveloppes.reduce((a, e) => a + num(e.prevu), 0)) * n;
+    const budget = (S.charges.reduce((a, c) => a + num(c.montant), 0) + S.enveloppes.reduce((a, e) => a + num(e.prevu), 0)) * n + virOut(S, per.ms);
     const pct = budget ? Math.round(total / budget * 100) : 0;
     budgetCard = `<button class="card budget" data-tab="budget"><div class="brow"><span class="blab"><span class="ico xs">${ICON.budget.replace("<svg", '<svg width="14" height="14"')}</span>Budget <i class="dot ${total > budget ? "bad" : ""}"></i></span><span class="bamt"><b>${eurc(total)}</b> / ${eur(budget)}</span>${ICON.chev}</div>
       <div class="brow"><div class="bar ${total > budget ? "over" : ""} grow"><i style="width:${Math.min(pct, 100)}%"></i></div><span class="pct">${pct} %</span></div></button>`;
@@ -797,7 +808,7 @@ function vRec(S, per) {
   const pr = S.provisions.map(p => { const pp = provPaye(S, p); return { k: "provision", id: p.id, titre: p.libelle, montant: per.ms.reduce((a, m) => a + provMonth(S, p, m), 0), meta: { icone: "🐷", couleur: "#C28316" }, sub: `${MOIS[(Number(p.mois) || 1) - 1]} · ${eur(p.montant)} / an${pp ? ` · payée en ${MOIS[pp.mois - 1].toLowerCase()}` : ""}` }; });
   const ratt = provTotal(S, per.ms) - sumOf(pr);
   if (ratt > .005) pr.push({ k: "virement", id: "ratt", titre: "Rattrapage des livrets", montant: ratt, meta: { icone: "🐷", couleur: "#C28316" }, sub: "pour qu'aucun livret ne passe en négatif" });
-  (S.virements || []).forEach(v => (v.sens === "in" ? rev : ch).push({ k: "virement", id: v.id, titre: v.titre, montant: v.montant * n, meta: catMeta(S, "_vir"), sub: "virement mensuel" }));
+  (S.virements || []).forEach(v => (v.sens === "in" ? rev : ch).push({ k: "virement", id: v.id, titre: v.titre, montant: virM(v, per.ms), meta: catMeta(S, "_vir"), sub: "virement mensuel" }));
   const T = L => sumOf(L);
   const block = (title, L) => `<section class="card"><h2>${title}<small>${eurc(T(L))}</small></h2><div class="list">${[...L].sort((a, b) => b.montant - a.montant).map(it => `<button class="row" ${editAttr(it)}>${ico(it.meta, "sm")}<div class="main"><div class="t">${esc(it.titre)}</div><div class="s">${esc([it.sub, it.meta.nom].filter(Boolean).join(" · "))}</div></div><div class="amt">${eurc(it.montant)}</div></button>`).join("") || `<p class="empty">Rien pour l'instant.</p>`}</div></section>`;
   const reste = T(rev) - T(ch) - T(pr);
@@ -819,7 +830,7 @@ function spark(vals, m) {
 }
 // Livrets et compte joint : toujours tout le foyer, sans le filtre par compte (Accueil, Dépenses, Analyse).
 function vLivrets(S) {
-  const m = app.month, j = joint(S), c0 = calc(S, 1), mi = m || 12;
+  const m = app.month, j = joint(S, m), c0 = calc(S, 1), mi = m || 12;
   const anyRatt = S.livrets.some(l => livretStats(S, l).rattTot > .005);
   const regC = { rev: c0.revReg, ch: S.charges.reduce((a, c) => a + num(c.montant), 0), pr: S.provisions.reduce((a, p) => a + num(p.montant) / 12, 0), en: c0.envPrevu }; // montants prévus, sans les paiements reliés ni les provisions pointées
   const ep = regC.rev - regC.ch - regC.pr - regC.en;
@@ -831,10 +842,10 @@ function vLivrets(S) {
   </div>
   <div class="totals"><span>Virement total / mois</span><span>${eur(S.livrets.reduce((a, l) => a + livretStats(S, l).mensM[mi - 1], 0))}</span></div>
   ${anyRatt ? `<p class="note">Rattrapage : une dépense arrive avant d'avoir été épargnée. Pour que le livret ne passe jamais en négatif, ce qui manque est mis de côté en plus sur les mois d'avant (compté dans « De côté »). Un solde de départ plus élevé l'évite.</p>` : ""}</section>
-  <section class="card"><h2>Compte joint<small>${S.repartition === "egal" ? "50 / 50" : "au prorata des salaires"}</small></h2>
+  <section class="card"><h2>Compte joint<small>${MOIS[j.m - 1].toLowerCase()} · ${S.repartition === "egal" ? "50 / 50" : "au prorata des salaires"}</small></h2>
     ${j.pers.map(p => `<div class="kv"><span>${esc(p.nom)} vire <span class="muted">(${Math.round(p.part * 100)} %)</span></span><b>${eur(p.vir)}</b></div>`).join("")}
-    <div class="kv total"><span>À couvrir chaque mois</span><b>${eur(j.besoin)}</b></div>
-    <p class="note">${eur(j.ch)} de charges · ${eur(j.prov)} de provisions · ${eur(j.env)} d'enveloppes${j.ep ? ` · ${eur(j.ep)} d'épargne commune` : ""}${j.commun ? ` − ${eur(j.commun)} de revenus du compte joint` : ""}.</p>
+    <div class="kv total"><span>À couvrir en ${MOIS[j.m - 1].toLowerCase()}</span><b>${eur(j.besoin)}</b></div>
+    <p class="note">${eur(j.ch)} de charges · ${eur(j.prov)} à mettre de côté · ${eur(j.env)} d'enveloppes${j.ep ? ` · ${eur(j.ep)} d'épargne commune` : ""}${j.commun ? ` − ${eur(j.commun)} de revenus du compte joint` : ""}. Montants réels du mois : paiements et versements reliés, dépenses annuelles déjà payées retirées.</p>
     ${j.pers.map(p => `<div class="kv"><span>Reste perso ${esc(p.nom)}</span><b class="${p.reste < 0 ? "neg" : ""}">${eur(p.reste)}</b></div>`).join("")}
   </section>
   <section class="card"><h2>Mois type<small>hors primes</small></h2>
@@ -1949,14 +1960,17 @@ const compteFilter = (S, fc) => `<div class="aseg dfilter" role="group" aria-lab
 // grâce aux virements de chacun) ; un compte perso garde ses dépenses dans les enveloppes, sans budget prévu.
 // Les virements mensuels vers le compte joint (calculés comme dans Livrets) entrent sur le joint et sortent des comptes perso.
 // Virement prévu d'un compte perso vers le joint : une sortie budgétée, comme une charge fixe.
-const virOut = S => (S.virements || []).filter(v => v.sens === "out").reduce((a, v) => a + v.montant, 0);
+// v.mois : montant de chaque mois (janvier → décembre), recalculé mois par mois (joint).
+const virM = (v, ms) => ms.reduce((a, m) => a + (v.mois[m - 1] || 0), 0);
+const virOut = (S, ms) => (S.virements || []).filter(v => v.sens === "out").reduce((a, v) => a + virM(v, ms), 0);
 const VIR_CAT = { id: "_vir", nom: "Virements internes", icone: "🔁", couleur: "#7A8B99", sens: "" };
 function forCompte(S, fc) {
   if (fc === "all") return S;
-  const pers = comptePersonne(fc), j = joint(S);
-  const virements = j.pers.filter(p => p.vir > 0 && (fc === "Joint" || fc === "Perso " + p.nom)).map(p => fc === "Joint"
-    ? { id: "vir-" + p.nom, sens: "in", titre: `Virement de ${p.nom}`, montant: p.vir }
-    : { id: "vir-" + p.nom, sens: "out", titre: "Virement vers le compte joint", montant: p.vir });
+  const pers = comptePersonne(fc), js = ALL_MONTHS.map(m => joint(S, m));
+  const virements = S.personnes.map((nom, i) => ({ nom, mois: js.map(j => Math.max(j.pers[i].vir, 0)) }))
+    .filter(p => p.mois.some(v => v > 0) && (fc === "Joint" || fc === "Perso " + p.nom)).map(p => fc === "Joint"
+      ? { id: "vir-" + p.nom, sens: "in", titre: `Virement de ${p.nom}`, mois: p.mois }
+      : { id: "vir-" + p.nom, sens: "out", titre: "Virement vers le compte joint", mois: p.mois });
   return { ...S, depenses: S.depenses.filter(d => depCompte(S, d) === fc), charges: S.charges.filter(c => c.compte === fc),
     revenus: S.revenus.filter(r => r.personne === pers), provisions: fc === "Joint" ? S.provisions : [],
     enveloppes: fc === "Joint" ? S.enveloppes : S.enveloppes.map(e => ({ ...e, prevu: 0 })),
