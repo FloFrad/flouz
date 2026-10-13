@@ -102,16 +102,16 @@ const app = {
   month: new Date().getMonth() + 1,
   dcompte: LS.get("bf:dcompte", "all"), // filtre par compte des saisies (onglet Dépenses)
   aseg: LS.get("bf:aseg", "all"), aview: LS.get("bf:aview", "cat"), aopen: null, // onglet Analyse
-  look: LS.get("bf:look", "ios"), // apparence de ce téléphone (Réglages › Apparence)
+  look: LS.get("bf:look", "sante"), // apparence de ce téléphone (Réglages › Apparence)
   schemaOld: false,           // la base n'accepte pas encore le type « categorie » (SQL pas mis à jour)
   sync: "ok", channel: null, flushing: false, seq: 0,
   email: LS.get("bf:email", ""), signup: false, authErr: "", busy: false
 };
 
 // Apparences : « classique » (d'origine) et trois styles aérés inspirés d'Apple (classe .airy commune).
-const LOOKS = [["ios", "Réglages", "Listes groupées sur fond gris, comme l'app Réglages : sobre et très lisible."], ["sante", "Santé", "Cartes résumé avec un titre en couleur et de grands chiffres, comme l'app Santé."], ["epure", "Épuré", "Fond blanc sans cartes, séparateurs fins et gros montants, comme Apple Card."], ["classique", "Classique", "Cartes pastel de la première version."]];
+const LOOKS = [["sante", "Santé", "Cartes résumé avec un titre en couleur et de grands chiffres, comme l'app Santé."], ["ios", "Réglages", "Listes groupées sur fond gris, comme l'app Réglages : sobre et très lisible."], ["epure", "Épuré", "Fond blanc sans cartes, séparateurs fins et gros montants, comme Apple Card."], ["classique", "Classique", "Cartes pastel de la première version."]];
 function applyLook() {
-  if (!LOOKS.some(([k]) => k === app.look)) app.look = "ios";
+  if (!LOOKS.some(([k]) => k === app.look)) app.look = "sante";
   const r = document.documentElement;
   r.dataset.look = app.look;
   r.classList.toggle("airy", app.look !== "classique");
