@@ -602,13 +602,39 @@ function vBudget(S) {
     enveloppe: "Dépenses du quotidien, avec un budget par mois."
   }[seg];
   const addLabel = { revenu: "Ajouter un revenu", charge: "Ajouter une charge", provision: "Ajouter une dépense annuelle", enveloppe: "Ajouter une enveloppe" }[seg];
+  const row = it => { const [t, s, a, as] = rowOf(it); return `<button class="row" data-edit="${seg}" data-id="${it.id}"><div class="main"><div class="t">${esc(t) || "<span class='muted'>Sans nom</span>"}</div><div class="s">${esc(s)}</div></div><div class="amt">${a}<small>${as}</small></div>${ICON.chev}</button>`; };
+  if (seg === "revenu") return `${head("Budget")}
+  ${segBar(seg)}
+  <p class="note" style="margin:0">${help}</p>
+  ${revenusGroupes(S, row)}
+  <section class="card"><div class="list"><button class="addrow" data-new="revenu" style="border-top:0">${ICON.plus.replace("<svg", '<svg width="18" height="18"')} ${addLabel}</button></div>
+  <div class="totals"><span>${total[0]}</span><span>${total[1]}</span></div></section>`;
   return `${head("Budget")}
   ${segBar(seg)}
   <p class="note" style="margin:0">${help}</p>
   <section class="card"><div class="list">
-    ${L.length ? L.map(it => { const [t, s, a, as] = rowOf(it); return `<button class="row" data-edit="${seg}" data-id="${it.id}"><div class="main"><div class="t">${esc(t) || "<span class='muted'>Sans nom</span>"}</div><div class="s">${esc(s)}</div></div><div class="amt">${a}<small>${as}</small></div>${ICON.chev}</button>`; }).join("") : `<p class="empty">Rien pour l'instant.</p>`}
+    ${L.length ? L.map(row).join("") : `<p class="empty">Rien pour l'instant.</p>`}
     <button class="addrow" data-new="${seg}">${ICON.plus.replace("<svg", '<svg width="18" height="18"')} ${addLabel}</button>
   </div><div class="totals"><span>${total[0]}</span><span>${total[1]}</span></div></section>`;
+}
+// Budget › Revenus : une carte par fréquence (mensuels, puis ponctuels), rangée par catégorie, chaque catégorie triée par mois.
+function revenusGroupes(S, row) {
+  const ordre = new Map(S.categories.filter(c => c.sens === "revenu").map((c, i) => [c.id, i]));
+  const rang = id => (ordre.has(id) ? ordre.get(id) : 1e9); // « À catégoriser » en dernier
+  const mois = r => (r.frequence === "Mensuel" ? 0 : Number(r.mois) || 1);
+  const card = (titre, L, unite) => {
+    if (!L.length) return "";
+    const cats = new Map();
+    L.forEach(r => { const k = revenuCat(S, r) || ""; (cats.get(k) || cats.set(k, []).get(k)).push(r); });
+    const body = [...cats].sort(([a], [b]) => rang(a) - rang(b)).map(([k, rs]) => {
+      rs.sort((a, b) => mois(a) - mois(b) || String(a.libelle || "").localeCompare(String(b.libelle || ""), "fr"));
+      const meta = catMeta(S, k);
+      return `<div class="rcat">${ico(meta, "xs")}<b>${esc(meta.nom)}</b><small>${eur(rs.reduce((a, r) => a + num(r.montant), 0))}</small></div>${rs.map(row).join("")}`;
+    }).join("");
+    return `<section class="card"><h2>${titre}<small>${eur(L.reduce((a, r) => a + num(r.montant), 0))} ${unite}</small></h2><div class="list">${body}</div></section>`;
+  };
+  return card("Revenus mensuels", S.revenus.filter(r => r.frequence === "Mensuel"), "/ mois")
+    + card("Revenus ponctuels", S.revenus.filter(r => r.frequence !== "Mensuel"), "sur l'année");
 }
 
 /* ====================== Analyse ====================== */
